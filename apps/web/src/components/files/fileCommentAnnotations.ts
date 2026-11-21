@@ -2,12 +2,20 @@ import type { LineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "~/i18n/messages";
 
+/** A span inside the commented lines; columns are 1-based and the end is exclusive. */
+export interface FileCommentQuote {
+  text: string;
+  startColumn: number;
+  endColumn: number;
+}
+
 export interface FileCommentAnnotationEntry {
   id: string;
   kind: "draft" | "comment";
   startLine: number;
   endLine: number;
   text: string;
+  quote?: FileCommentQuote | undefined;
 }
 
 export interface FileCommentAnnotationGroup {

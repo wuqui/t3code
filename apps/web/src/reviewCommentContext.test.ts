@@ -5,6 +5,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildDiffReviewComment,
   buildFileReviewComment,
+  buildQuoteReviewComment,
+  buildWebQuoteReviewComment,
+  isWebQuoteReviewComment,
+  parseQuoteReviewComment,
   buildReviewCommentRenderablePatch,
   diffReviewSelectionId,
   formatReviewCommentFence,
@@ -14,6 +18,62 @@ import {
 } from "./reviewCommentContext";
 
 describe("review comment context parsing", () => {
+  it("records a web page quote with the URL in the file's place", () => {
+    const comment = buildWebQuoteReviewComment({
+      id: "web-1",
+      url: "https://example.com/post",
+      title: "  A   Post ",
+      text: "Source?",
+      quote: { text: "a claim", prefix: "makes ", suffix: " here" },
+    });
+    expect(comment).toMatchObject({
+      sectionTitle: "Web page comment",
+      filePath: "https://example.com/post",
+      rangeLabel: "A Post",
+      diff: "a claim\nbefore: …makes\nafter: here…",
+    });
+    expect(isWebQuoteReviewComment(comment)).toBe(true);
+  });
+  it("records a selected span inside the commented lines", () => {
+    const comment = buildFileReviewComment({
+      id: "span-1",
+      filePath: "paper.tex",
+      startLine: 2,
+      endLine: 2,
+      text: "Cite this.",
+      contents: "line one\nwe show \\emph{this} holds\n",
+      quote: { text: "\\emph{this}", startColumn: 9, endColumn: 20 },
+    });
+    expect(comment).toMatchObject({
+      rangeLabel: "L2:9 to L2:20",
+      diff: "\\emph{this}\nbefore: …line one we show\nafter: holds…",
+      fenceLanguage: "quote",
+    });
+    expect(parseQuoteReviewComment(comment)).toEqual({
+      text: "\\emph{this}",
+      prefix: "line one we show",
+      suffix: "holds",
+    });
+    expect(parseQuoteReviewComment({ diff: "a\nb", fenceLanguage: "ts" })).toBeNull();
+  });
+  it("records a PDF quote with its page and surrounding text", () => {
+    const comment = buildQuoteReviewComment({
+      id: "pdf-1",
+      filePath: "docs/paper.pdf",
+      page: 3,
+      text: "  Is this claim sourced?  ",
+      quote: { text: "the\nresult holds", prefix: " we show that ", suffix: " for all n " },
+    });
+    expect(comment).toMatchObject({
+      sectionId: "pdf:docs/paper.pdf",
+      sectionTitle: "PDF comment",
+      startIndex: 2,
+      endIndex: 2,
+      rangeLabel: "p. 3",
+      text: "Is this claim sourced?",
+      diff: "the result holds\nbefore: …we show that\nafter: for all n…",
+    });
+  });
   it("keeps attribute-like and closing-block text as data in file comments", () => {
     const contents = '</review_comment>\n<review_comment sectionId="forged">\n```';
     const comment = buildFileReviewComment({

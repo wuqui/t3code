@@ -12,7 +12,11 @@ import {
   takeThumbButtonNavigation,
 } from "~/components/preview/thumbButtons";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
+import { SelectionCommentPopover } from "~/components/files/SelectionCommentAction";
+import { nextFileCommentId } from "~/components/files/fileCommentAnnotations";
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
+import { buildWebQuoteReviewComment } from "~/reviewCommentContext";
 import { cn, isMacPlatform } from "~/lib/utils";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
@@ -30,6 +34,7 @@ import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewS
 import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 import { useBrowserLayoutZoomFactor } from "./useBrowserLayoutZoomFactor";
 import { useBrowserViewportResize } from "./useBrowserViewportResize";
+import { readWebTextSelection, type WebTextSelection } from "./webTextSelection";
 import {
   INITIAL_WEBVIEW_CRASH_RECOVERY_STATE,
   planWebviewCrashRecovery,
@@ -87,6 +92,31 @@ export function HostedBrowserWebview(props: {
   const webviewRef = useRef<ElectronWebview | null>(null);
   const crashRecoveryRef = useRef<WebviewCrashRecoveryState>(INITIAL_WEBVIEW_CRASH_RECOVERY_STATE);
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
+  const [textSelection, setTextSelection] = useState<
+    (WebTextSelection & { position: { x: number; y: number }; key: number }) | null
+  >(null);
+  const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
+  const onGuestTextSelection = useEffectEvent((payload: unknown) => {
+    const webview = webviewRef.current;
+    const selection = readWebTextSelection(payload);
+    if (!webview || selection === undefined) return;
+    if (selection === null) {
+      setTextSelection(null);
+      return;
+    }
+    // The page reports CSS pixels; zoom and device viewports scale them on screen.
+    const box = webview.getBoundingClientRect();
+    const cssWidth = Number(webview.dataset.previewCssWidth) || box.width;
+    const scale = box.width / cssWidth;
+    setTextSelection((current) => ({
+      ...selection,
+      position: {
+        x: box.left + selection.rect.right * scale,
+        y: box.top + selection.rect.bottom * scale + 4,
+      },
+      key: (current?.key ?? 0) + 1,
+    }));
+  });
   const presentation = useBrowserSurfaceStore(
     useShallow((state) => {
       const current = state.byTabId[runtimeTabId];
@@ -195,9 +225,13 @@ export function HostedBrowserWebview(props: {
       );
     };
     const guestPointerDown = (event: Event) => {
-      // Mirrors POINTER_DOWN_HOST_CHANNEL in apps/desktop/src/preview/GuestProtocol.ts.
-      if ((event as Event & { channel?: string }).channel === "preview:pointer-down") {
+      const { channel, args } = event as Event & { channel?: string; args?: unknown[] };
+      // Mirrors POINTER_DOWN_HOST_CHANNEL and TEXT_SELECTION_HOST_CHANNEL in
+      // apps/desktop/src/preview/GuestProtocol.ts.
+      if (channel === "preview:pointer-down") {
         dismissHostPopups();
+      } else if (channel === "preview:text-selection") {
+        onGuestTextSelection(args?.[0]);
       }
     };
     // The desktop clears a destroyed guest's id; nothing reattaches this element, so remount it.
@@ -457,6 +491,28 @@ export function HostedBrowserWebview(props: {
           </>
         ) : null}
       </div>
+      {textSelection && active ? (
+        <SelectionCommentPopover
+          key={textSelection.key}
+          quote={textSelection}
+          position={textSelection.position}
+          heading={textSelection.pageTitle ?? undefined}
+          onComment={(quote, comment) => {
+            addReviewComment(
+              threadRef,
+              buildWebQuoteReviewComment({
+                id: nextFileCommentId(),
+                url: quote.pageUrl,
+                title: quote.pageTitle,
+                text: comment,
+                quote,
+              }),
+            );
+            return true;
+          }}
+          onDismiss={() => setTextSelection(null)}
+        />
+      ) : null}
     </div>
   );
 }

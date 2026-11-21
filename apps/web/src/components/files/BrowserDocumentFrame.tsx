@@ -11,6 +11,7 @@ import {
   filePreviewRestoreScrollMessage,
   isFilePreviewScrollRestored,
   readFilePreviewScroll,
+  readFilePreviewSelection,
   type HtmlRenderShortcut,
   htmlRenderShortcutsMessage,
   HTML_RENDER_CONTAIN_SCROLL_FRAGMENT,
@@ -40,6 +41,9 @@ import {
 import { isElectron } from "~/env";
 import { FileSurfaceLoading } from "./fileSurfaceChrome";
 import type { PdfViewState } from "./PdfViewer";
+import type { PdfTextQuote } from "./pdfTextSelection";
+import type { RenderedTextQuote } from "./renderedTextSelection";
+import { SelectionCommentPopover } from "./SelectionCommentAction";
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
@@ -86,6 +90,7 @@ function PdfDocument(props: {
   title: string;
   documentKey: string;
   actions?: ReactNode;
+  onComment?: ((quote: PdfTextQuote, comment: string) => boolean) | undefined;
 }) {
   const [view, setView] = useState<PdfViewState>({ page: 0, offset: 0, zoom: null, left: 0 });
   return (
@@ -97,6 +102,7 @@ function PdfDocument(props: {
       initialView={view}
       onViewChange={setView}
       actions={props.actions}
+      onComment={props.onComment}
     />
   );
 }
@@ -109,11 +115,14 @@ function PdfDocumentRevision(props: {
   initialView: PdfViewState;
   onViewChange: (view: PdfViewState) => void;
   actions?: ReactNode;
+  onComment?: ((quote: PdfTextQuote, comment: string) => boolean) | undefined;
 }) {
   const [src] = useState(props.src);
   // The Electron shell does not enable PDF plugins. WebKit embeds on iOS
   // expose only the first page, even when pdfViewerEnabled reports support.
+  // Commenting needs the PDF.js text layer, which Chromium's plugin does not expose.
   const native =
+    !props.onComment &&
     !isElectron &&
     navigator.pdfViewerEnabled &&
     !/iPad|iPhone|iPod/.test(navigator.userAgent) &&
@@ -134,6 +143,7 @@ function PdfDocumentRevision(props: {
         initialView={props.initialView}
         onViewChange={props.onViewChange}
         actions={props.actions}
+        {...(props.onComment ? { onComment: props.onComment } : {})}
       />
     </Suspense>
   );
@@ -155,6 +165,10 @@ export function BrowserDocumentFrame(props: {
   readonly documentId?: string | undefined;
   /** Toolbar actions for the in-app PDF viewer; Chromium's own viewer brings its own. */
   readonly pdfActions?: ReactNode;
+  /** Offers comments on selected PDF text and forces the in-app viewer that supports them. */
+  readonly onPdfComment?: ((quote: PdfTextQuote, comment: string) => boolean) | undefined;
+  /** Offers comments on text selected in a served workspace page. */
+  readonly onTextComment?: ((quote: RenderedTextQuote, comment: string) => boolean) | undefined;
 }) {
   const key = props.documentKey ?? props.src;
   return props.pdf ? (
@@ -164,6 +178,7 @@ export function BrowserDocumentFrame(props: {
       src={props.src}
       title={props.title}
       actions={props.pdfActions}
+      onComment={props.onPdfComment}
     />
   ) : props.htmlRender ? (
     <HtmlRenderDocument
@@ -179,6 +194,7 @@ export function BrowserDocumentFrame(props: {
       documentKey={key}
       src={props.src}
       title={props.title}
+      onComment={props.onTextComment}
     />
   );
 }
@@ -209,7 +225,13 @@ function FileDocument(props: {
   readonly documentKey: string;
   readonly src: string;
   readonly title: string;
+  readonly onComment?: ((quote: RenderedTextQuote, comment: string) => boolean) | undefined;
 }) {
+  const [selection, setSelection] = useState<{
+    quote: RenderedTextQuote;
+    position: { x: number; y: number };
+    key: number;
+  } | null>(null);
   const [frames, setFrames] = useState<FileDocumentFrames>(() => ({
     shown: { key: props.documentKey, src: props.src },
     next: null,
@@ -231,9 +253,29 @@ function FileDocument(props: {
   const reveal = (revision: FileDocumentRevision) =>
     requestAnimationFrame(() => requestAnimationFrame(() => setFrames(showRevision(revision))));
   const onFrameMessage = useEffectEvent((event: MessageEvent) => {
+    const shown = shownFrame.current;
+    const reported = readFilePreviewSelection(event.data);
+    if (reported !== undefined) {
+      if (!props.onComment || !shown || event.source !== shown.contentWindow) return;
+      if (reported === null) {
+        setSelection(null);
+        return;
+      }
+      const frame = shown.getBoundingClientRect();
+      const { text, prefix, suffix, rect } = reported;
+      setSelection((current) => ({
+        quote: { text, prefix, suffix },
+        position: { x: frame.left + rect.right, y: frame.top + rect.bottom + 4 },
+        key: (current?.key ?? 0) + 1,
+      }));
+      return;
+    }
     const position = readFilePreviewScroll(event.data);
     if (position !== undefined) {
-      if (event.source === shownFrame.current?.contentWindow) scroll.current = position;
+      if (event.source === shown?.contentWindow) {
+        scroll.current = position;
+        setSelection(null);
+      }
     } else if (
       next !== null &&
       event.source === nextFrame.current?.contentWindow &&
@@ -286,6 +328,15 @@ function FileDocument(props: {
           />
         ),
       )}
+      {selection && props.onComment ? (
+        <SelectionCommentPopover
+          key={selection.key}
+          quote={selection.quote}
+          position={selection.position}
+          onComment={props.onComment}
+          onDismiss={() => setSelection(null)}
+        />
+      ) : null}
     </div>
   );
 }

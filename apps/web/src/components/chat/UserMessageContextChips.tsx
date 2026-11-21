@@ -29,6 +29,8 @@ import ChatMarkdown from "../ChatMarkdown";
 import { EnvironmentContextChip } from "../EnvironmentContextChip";
 import { ThreadContextChip } from "../ThreadContextChip";
 import { ResponseReplyCard } from "./AssistantCitationChip";
+import { TextQuoteCommentCard } from "./TextQuoteCommentCard";
+import { parseQuoteReviewComment } from "~/reviewCommentContext";
 import { MessageCircleIcon, MousePointerClickIcon, PaintbrushIcon } from "lucide-react";
 import type { ComposerContextId, KnownComposerContextRecord } from "@t3tools/contracts";
 import { buildExpandedImagePreview } from "./ExpandedImagePreview";
@@ -480,6 +482,16 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
       render: (record, context) => {
         if (record.kind !== "review-comment") {
           return <UnavailableUserMessageContextChip {...context} />;
+        }
+        if (parseQuoteReviewComment(record)) {
+          return (
+            <TextQuoteCommentCard
+              record={record}
+              copyMarkdown={context.copyMarkdown}
+              leading={context.reference.leading ?? false}
+              trailing={context.reference.trailing ?? false}
+            />
+          );
         }
         const isPullRequest = isPullRequestSummaryContext(record);
         const label = reviewCommentContextLabel(record, context.m);

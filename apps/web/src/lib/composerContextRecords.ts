@@ -116,6 +116,8 @@ export function reviewCommentContextLabel(
 
 const REVIEW_SECTION_TITLES: ReadonlyMap<string, string> = new Map([
   ["File comment", msg("File comment")],
+  ["PDF comment", msg("PDF comment")],
+  ["Web page comment", msg("Web page comment")],
   ["Review guide", msg("Review guide")],
 ]);
 

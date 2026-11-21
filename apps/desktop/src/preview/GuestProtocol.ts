@@ -8,6 +8,8 @@ export const HUMAN_INPUT_CHANNEL = "preview:human-input";
 // Sent to the hosting <webview> element (ipc-message). The web app mirrors this
 // literal in HostedBrowserWebview because it cannot import from the desktop app.
 export const POINTER_DOWN_HOST_CHANNEL = "preview:pointer-down";
+// Also mirrored in HostedBrowserWebview: the page's text selection, for a comment on it.
+export const TEXT_SELECTION_HOST_CHANNEL = "preview:text-selection";
 export const PAGE_UNHANDLED_SHORTCUT_CHANNEL = "preview:page-unhandled-shortcut";
 export const RECORDING_CURSOR_CHANNEL = "preview:recording-cursor";
 export const RECORDING_POINTER_CHANNEL = "preview:recording-pointer";

@@ -481,6 +481,9 @@ export function injectHtmlRenderBootstrap(html: string): string {
 const FILE_PREVIEW_SCROLL_METHOD = "t3/notifications/file-preview-scroll";
 const FILE_PREVIEW_RESTORE_SCROLL_METHOD = "t3/file-preview/restore-scroll";
 const FILE_PREVIEW_SCROLL_RESTORED_METHOD = "t3/notifications/file-preview-scroll-restored";
+const FILE_PREVIEW_SELECTION_METHOD = "t3/notifications/file-preview-selection";
+const FILE_PREVIEW_SELECTION_MAX_TEXT = 8_000;
+const FILE_PREVIEW_SELECTION_CONTEXT = 32;
 
 export interface FilePreviewScroll {
   readonly x: number;
@@ -490,9 +493,10 @@ export interface FilePreviewScroll {
 /**
  * Appended after a served workspace page so it lands at the end of the body without changing
  * the doctype. A preview frame is an opaque origin, so only the page can report and restore its
- * scroll position across the reload that follows each workspace change.
+ * scroll position across the reload that follows each workspace change, and report the text the
+ * reader selects so they can comment on it.
  */
-export const FILE_PREVIEW_SCROLL_SCRIPT = `<script>(function(){var p=window.parent,f=0;if(p===window)return;addEventListener("scroll",function(){if(!f)f=requestAnimationFrame(function(){f=0;p.postMessage({jsonrpc:"2.0",method:${JSON.stringify(FILE_PREVIEW_SCROLL_METHOD)},params:{x:scrollX,y:scrollY}},"*");});},{passive:true});addEventListener("message",function(e){var d=e.data,q=d&&d.params;if(e.source!==p||!d||d.jsonrpc!=="2.0"||d.method!==${JSON.stringify(FILE_PREVIEW_RESTORE_SCROLL_METHOD)}||!q||typeof q.x!=="number"||typeof q.y!=="number")return;scrollTo({left:q.x,top:q.y,behavior:"instant"});p.postMessage({jsonrpc:"2.0",method:${JSON.stringify(FILE_PREVIEW_SCROLL_RESTORED_METHOD)}},"*");});})();</script>`;
+export const FILE_PREVIEW_SCROLL_SCRIPT = `<script>(function(){var p=window.parent,f=0;if(p===window)return;function n(t){return t.replace(/\\s+/g," ")}function v(g){var t="",w=document.createTreeWalker(g.commonAncestorContainer,4,{acceptNode:function(d){var e=d.parentElement;return e&&/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(e.tagName)||!g.intersectsNode(d)?2:1}}),d;while(d=w.nextNode())t+=d.data.slice(d===g.startContainer?g.startOffset:0,d===g.endContainer?g.endOffset:d.data.length);return t}function m(x){p.postMessage({jsonrpc:"2.0",method:${JSON.stringify(FILE_PREVIEW_SELECTION_METHOD)},params:x},"*")}function c(){var s=getSelection(),t=s&&s.rangeCount&&!s.isCollapsed?String(s):"";if(!t.trim()){m({text:""});return}var g=s.getRangeAt(0),r=g.getBoundingClientRect(),b="",a="";try{var x=document.createRange();x.selectNodeContents(document.body);x.setEnd(g.startContainer,g.startOffset);b=n(v(x)).slice(-${FILE_PREVIEW_SELECTION_CONTEXT});x=document.createRange();x.selectNodeContents(document.body);x.setStart(g.endContainer,g.endOffset);a=n(v(x)).slice(0,${FILE_PREVIEW_SELECTION_CONTEXT})}catch(e){}m({text:t.slice(0,${FILE_PREVIEW_SELECTION_MAX_TEXT + 1}),prefix:b,suffix:a,rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom}})}addEventListener("mouseup",function(){setTimeout(c,0)});addEventListener("keyup",function(e){if(e.shiftKey||e.key==="Shift")c()});document.addEventListener("selectionchange",function(){var s=getSelection();if(!s||s.isCollapsed)m({text:""})});addEventListener("scroll",function(){if(!f)f=requestAnimationFrame(function(){f=0;p.postMessage({jsonrpc:"2.0",method:${JSON.stringify(FILE_PREVIEW_SCROLL_METHOD)},params:{x:scrollX,y:scrollY}},"*");});},{passive:true});addEventListener("message",function(e){var d=e.data,q=d&&d.params;if(e.source!==p||!d||d.jsonrpc!=="2.0"||d.method!==${JSON.stringify(FILE_PREVIEW_RESTORE_SCROLL_METHOD)}||!q||typeof q.x!=="number"||typeof q.y!=="number")return;scrollTo({left:q.x,top:q.y,behavior:"instant"});p.postMessage({jsonrpc:"2.0",method:${JSON.stringify(FILE_PREVIEW_SCROLL_RESTORED_METHOD)}},"*");});})();</script>`;
 
 export function readFilePreviewScroll(data: unknown): FilePreviewScroll | undefined {
   if (typeof data !== "object" || data === null) return undefined;
@@ -503,6 +507,45 @@ export function readFilePreviewScroll(data: unknown): FilePreviewScroll | undefi
   return typeof x === "number" && Number.isFinite(x) && typeof y === "number" && Number.isFinite(y)
     ? { x, y }
     : undefined;
+}
+
+export interface FilePreviewSelection {
+  readonly text: string;
+  readonly prefix: string;
+  readonly suffix: string;
+  /** Viewport rectangle inside the frame. */
+  readonly rect: {
+    readonly left: number;
+    readonly top: number;
+    readonly right: number;
+    readonly bottom: number;
+  };
+}
+
+/** A frame's selection report: a selection, `null` when it cleared, `undefined` for other data. */
+export function readFilePreviewSelection(data: unknown): FilePreviewSelection | null | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const { jsonrpc, method, params } = data as Record<string, unknown>;
+  if (jsonrpc !== "2.0" || method !== FILE_PREVIEW_SELECTION_METHOD) return undefined;
+  if (typeof params !== "object" || params === null) return undefined;
+  const { text, prefix, suffix, rect } = params as Record<string, unknown>;
+  if (typeof text !== "string") return undefined;
+  if (!text.trim()) return null;
+  if (typeof rect !== "object" || rect === null) return undefined;
+  const { left, top, right, bottom } = rect as Record<string, unknown>;
+  const edges = [left, top, right, bottom];
+  if (!edges.every((edge) => typeof edge === "number" && Number.isFinite(edge))) return undefined;
+  return {
+    text,
+    prefix: typeof prefix === "string" ? prefix.slice(-FILE_PREVIEW_SELECTION_CONTEXT) : "",
+    suffix: typeof suffix === "string" ? suffix.slice(0, FILE_PREVIEW_SELECTION_CONTEXT) : "",
+    rect: {
+      left: left as number,
+      top: top as number,
+      right: right as number,
+      bottom: bottom as number,
+    },
+  };
 }
 
 export function isFilePreviewScrollRestored(data: unknown): boolean {

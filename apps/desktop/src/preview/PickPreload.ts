@@ -27,6 +27,7 @@ import {
   strokeBounds,
   type StrokeGeometry,
 } from "./AnnotationStroke.ts";
+import { installTextSelectionReport } from "./TextSelectionReport.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import { installRecordingCursor } from "./RecordingCursor.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS } from "./RecordingInput.ts";
@@ -238,6 +239,7 @@ const reportUnhandledShortcut = (event: KeyboardEvent): void => {
 };
 
 window.addEventListener("keydown", reportUnhandledShortcut, true);
+installTextSelectionReport(() => activeSession !== null);
 
 // Registered before page scripts so their capture listeners never see keys typed into the
 // overlay; the closed shadow root retargets those to the host, hiding that they edit text.

@@ -58,6 +58,37 @@ export function formatReviewCommentFence(language: string, contents: string): st
   return [`${fence}${language}`, contents.trimEnd(), fence].join("\n");
 }
 
+const QUOTE_FENCE_LANGUAGE = "quote";
+const QUOTE_CONTEXT_LENGTH = 32;
+const QUOTE_BEFORE = /^before: …(.*)$/u;
+const QUOTE_AFTER = /^after: (.*)…$/u;
+
+type TextQuote = { readonly text: string; readonly prefix: string; readonly suffix: string };
+
+/** The quote, then the text around it on its own lines, as the agent reads it. */
+function formatQuoteDiff(quote: TextQuote): string {
+  const lines = [quote.text];
+  const before = quote.prefix.replace(/\s+/g, " ").trim();
+  const after = quote.suffix.replace(/\s+/g, " ").trim();
+  if (before) lines.push(`before: …${before}`);
+  if (after) lines.push(`after: ${after}…`);
+  return lines.join("\n");
+}
+
+/** The quote a text-selection comment carries, or null for a line or diff comment. */
+export function parseQuoteReviewComment(comment: {
+  readonly diff: string;
+  readonly fenceLanguage?: string | undefined;
+}): TextQuote | null {
+  if (comment.fenceLanguage !== QUOTE_FENCE_LANGUAGE) return null;
+  const lines = comment.diff.split("\n");
+  const suffix = lines.length > 1 ? (QUOTE_AFTER.exec(lines.at(-1)!)?.[1] ?? null) : null;
+  if (suffix !== null) lines.pop();
+  const prefix = lines.length > 1 ? (QUOTE_BEFORE.exec(lines.at(-1)!)?.[1] ?? null) : null;
+  if (prefix !== null) lines.pop();
+  return { text: lines.join("\n"), prefix: prefix ?? "", suffix: suffix ?? "" };
+}
+
 export function buildFileReviewComment(input: {
   id: string;
   filePath: string;
@@ -65,10 +96,38 @@ export function buildFileReviewComment(input: {
   endLine: number;
   text: string;
   contents: string;
+  /** A selected span within the lines; columns are 1-based and the end is exclusive. */
+  quote?: { text: string; startColumn: number; endColumn: number } | undefined;
 }): ReviewCommentContext {
   const startLine = Math.max(1, Math.min(input.startLine, input.endLine));
   const endLine = Math.max(startLine, Math.max(input.startLine, input.endLine));
   const selectedLines = input.contents.split("\n").slice(startLine - 1, endLine);
+  if (input.quote && input.quote.text.trim()) {
+    const { startColumn, endColumn } = input.quote;
+    const lines = input.contents.split("\n");
+    const offset = (line: number, column: number) =>
+      lines.slice(0, line - 1).reduce((total, text) => total + text.length + 1, 0) + column - 1;
+    const start = offset(startLine, startColumn);
+    const end = offset(endLine, endColumn);
+    return {
+      id: input.id,
+      sectionId: `file:${input.filePath}`,
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- stored in the review comment record sent to the agent
+      sectionTitle: "File comment",
+      filePath: input.filePath,
+      startIndex: startLine - 1,
+      endIndex: endLine - 1,
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- stored in the review comment record sent to the agent
+      rangeLabel: `L${startLine}:${startColumn} to L${endLine}:${endColumn}`,
+      text: input.text.trim(),
+      diff: formatQuoteDiff({
+        text: input.quote.text,
+        prefix: input.contents.slice(Math.max(0, start - QUOTE_CONTEXT_LENGTH), start),
+        suffix: input.contents.slice(end, end + QUOTE_CONTEXT_LENGTH),
+      }),
+      fenceLanguage: QUOTE_FENCE_LANGUAGE,
+    };
+  }
   return {
     id: input.id,
     sectionId: `file:${input.filePath}`,
@@ -83,6 +142,69 @@ export function buildFileReviewComment(input: {
     diff: selectedLines.join("\n"),
     fenceLanguage: inferReviewCommentFenceLanguage(input.filePath),
   };
+}
+
+/**
+ * A quote from a rendered document. `page` is 1-based and only PDFs have one; `quote` carries
+ * whitespace-normalized context around the selected text.
+ */
+export function buildQuoteReviewComment(input: {
+  id: string;
+  filePath: string;
+  page?: number | undefined;
+  text: string;
+  quote: { readonly text: string; readonly prefix: string; readonly suffix: string };
+}): ReviewCommentContext {
+  const page = input.page === undefined ? null : Math.max(1, Math.floor(input.page));
+  return {
+    id: input.id,
+    sectionId: `${page === null ? "file" : "pdf"}:${input.filePath}`,
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- stored in the review comment record sent to the agent
+    sectionTitle: page === null ? "File comment" : "PDF comment",
+    filePath: input.filePath,
+    startIndex: (page ?? 1) - 1,
+    endIndex: (page ?? 1) - 1,
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- stored in the review comment record sent to the agent
+    rangeLabel: page === null ? "rendered text" : `p. ${page}`,
+    text: input.text.trim(),
+    diff: formatQuoteDiff({ ...input.quote, text: input.quote.text.replace(/\s+/g, " ").trim() }),
+    fenceLanguage: QUOTE_FENCE_LANGUAGE,
+  };
+}
+
+const WEB_SECTION_PREFIX = "web:";
+const MAX_URL_LENGTH = 2_048;
+const MAX_TITLE_LENGTH = 200;
+
+/** A quote from a web page in the browser panel. The page's URL takes the file's place. */
+export function buildWebQuoteReviewComment(input: {
+  id: string;
+  url: string;
+  title: string | null;
+  text: string;
+  quote: { readonly text: string; readonly prefix: string; readonly suffix: string };
+}): ReviewCommentContext {
+  const url = input.url.slice(0, MAX_URL_LENGTH);
+  const title =
+    input.title?.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE_LENGTH) ||
+    url.slice(0, MAX_TITLE_LENGTH);
+  return {
+    id: input.id,
+    sectionId: `${WEB_SECTION_PREFIX}${url}`.slice(0, 255),
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- stored in the review comment record sent to the agent
+    sectionTitle: "Web page comment",
+    filePath: url,
+    startIndex: 0,
+    endIndex: 0,
+    rangeLabel: title,
+    text: input.text.trim(),
+    diff: formatQuoteDiff({ ...input.quote, text: input.quote.text.replace(/\s+/g, " ").trim() }),
+    fenceLanguage: QUOTE_FENCE_LANGUAGE,
+  };
+}
+
+export function isWebQuoteReviewComment(comment: { readonly sectionId: string }): boolean {
+  return comment.sectionId.startsWith(WEB_SECTION_PREFIX);
 }
 
 export function inferReviewCommentFenceLanguage(filePath: string): string {

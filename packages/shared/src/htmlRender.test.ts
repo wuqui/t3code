@@ -4,6 +4,7 @@ import {
   injectHtmlRenderBootstrap,
   readHtmlRenderImageRequest,
   readHtmlRenderLinkRequest,
+  readFilePreviewSelection,
 } from "./htmlRender.ts";
 import { htmlRenderFromToolItem } from "./toolOutput.ts";
 
@@ -180,5 +181,25 @@ describe("htmlRenderFromToolItem", () => {
     ] as const) {
       expect(htmlRenderFromToolItem({ toolName, output })).toEqual(reference);
     }
+  });
+});
+
+describe("readFilePreviewSelection", () => {
+  const report = (params: unknown) => ({
+    jsonrpc: "2.0",
+    method: "t3/notifications/file-preview-selection",
+    params,
+  });
+
+  it("reads a selection, a cleared selection, and ignores other messages", () => {
+    const rect = { left: 1, top: 2, right: 3, bottom: 4 };
+    expect(
+      readFilePreviewSelection(report({ text: "bar", prefix: "foo ", suffix: "", rect })),
+    ).toEqual({ text: "bar", prefix: "foo ", suffix: "", rect });
+    expect(readFilePreviewSelection(report({ text: "  " }))).toBeNull();
+    expect(readFilePreviewSelection(report({ text: "bar", rect: { left: "1" } }))).toBeUndefined();
+    expect(
+      readFilePreviewSelection({ jsonrpc: "2.0", method: "other", params: {} }),
+    ).toBeUndefined();
   });
 });
