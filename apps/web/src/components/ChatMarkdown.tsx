@@ -1102,6 +1102,15 @@ function useChatMarkdownState(
                 )
             : undefined
         }
+        onOpenWithDefaultApp={
+          canUseShellActions && !canOpenApp && environmentId !== null
+            ? async () =>
+                openInEditor({
+                  environmentId,
+                  input: { cwd: (await resolveHostPath()).absolutePath, editor: "file-manager" },
+                })
+            : undefined
+        }
         onOpenInBrowser={
           threadRef &&
           canOperatePreview &&

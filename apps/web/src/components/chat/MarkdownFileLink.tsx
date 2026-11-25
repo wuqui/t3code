@@ -53,6 +53,8 @@ interface MarkdownFileLinkProps {
   onReveal?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   revealLabel?: string | undefined;
   onDownload?: (() => void) | undefined;
+  /** Opens the file with the app the operating system assigns to it. */
+  onOpenWithDefaultApp?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
 }
 
 const MARKDOWN_FILE_LINK_CLASS_NAME = "chat-markdown-file-link";
@@ -78,6 +80,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   onReveal,
   revealLabel,
   onDownload,
+  onOpenWithDefaultApp,
   resolveCopyPaths,
   resolveDragPath,
 }: MarkdownFileLinkProps) {
@@ -120,6 +123,30 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     })();
+  };
+
+  const handleOpenWithDefaultApp = () => {
+    if (!onOpenWithDefaultApp) return;
+    const fail = (cause: unknown, error: unknown) => {
+      reportMarkdownActionFailure(
+        { operation: "open-file-with-default-app", target: targetPath },
+        cause,
+      );
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Unable to open file"),
+          description: error instanceof Error ? error.message : gt("An error occurred."),
+        }),
+      );
+    };
+    void onOpenWithDefaultApp().then(
+      (result) => {
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+        fail(result.cause, squashAtomCommandFailure(result));
+      },
+      (cause: unknown) => fail(cause, cause),
+    );
   };
 
   const handleOpenInFilePreview = () => {
@@ -264,6 +291,9 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         [
           ...(onOpenMedia ? ([{ id: "preview-media", label: gt("Preview media") }] as const) : []),
           ...(onOpen ? ([{ id: "open", label: openInEditorMenuLabel }] as const) : []),
+          ...(onOpenWithDefaultApp
+            ? ([{ id: "open-default-app", label: gt("Open in default app") }] as const)
+            : []),
           ...(onOpenInBrowser
             ? ([{ id: "open-in-browser", label: gt("Open in integrated browser") }] as const)
             : []),
@@ -285,6 +315,10 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
       }
       if (clicked === "open") {
         handleOpenInEditor();
+        return;
+      }
+      if (clicked === "open-default-app") {
+        handleOpenWithDefaultApp();
         return;
       }
       if (clicked === "open-in-browser") {
@@ -449,7 +483,8 @@ function areMarkdownFileLinkPropsEqual(
     previous.resolveCopyPaths === next.resolveCopyPaths &&
     previous.resolveDragPath === next.resolveDragPath &&
     previous.revealLabel === next.revealLabel &&
-    previous.onDownload === next.onDownload
+    previous.onDownload === next.onDownload &&
+    previous.onOpenWithDefaultApp === next.onOpenWithDefaultApp
   );
 }
 
