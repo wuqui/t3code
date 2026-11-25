@@ -1036,7 +1036,12 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
           ...(claims.download ? { download: true } : {}),
           ...(claims.fileName !== undefined ? { fileName: claims.fileName } : {}),
           ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
-          ...(claims.renderIntent === "mcp-app" ? { renderIntent: "mcp-app" as const } : {}),
+          ...(claims.renderIntent === "mcp-app"
+            ? { renderIntent: "mcp-app" as const }
+            : // HTML renders get the selection script, so readers can comment on their text.
+              claims.mimeType === "text/html"
+              ? { renderIntent: "file-preview" as const }
+              : {}),
         } satisfies ResolvedAsset)
       : null;
   }

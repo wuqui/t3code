@@ -706,6 +706,10 @@ export default function ChatView(props: ChatViewProps) {
     return inserted;
   };
   const citeAssistantTextStable = useStableCallback(citeAssistantText);
+  const openCitationCommentStable = useStableCallback(
+    (citation: AssistantCitation, sourceAnchor: AssistantCitationSourceAnchor) =>
+      composerRef.current?.openCitationComment(citation, sourceAnchor) ?? false,
+  );
   const replyToResponseStable = useStableCallback((response: ResponseContextRecord) => {
     const accepted = composerRef.current?.replyToResponse(response) ?? false;
     if (!accepted) {
@@ -3697,6 +3701,10 @@ export default function ChatView(props: ChatViewProps) {
                   citationRequest={citationRequest}
                   citationHistory={citationHistory}
                   onCiteAssistantText={citeAssistantTextStable}
+                  draftCitations={{
+                    draftTarget: composerDraftTarget,
+                    onOpen: openCitationCommentStable,
+                  }}
                   onReplyToResponse={replyToResponseStable}
                   {...(activeProject && !runsOutsideHostCheckout
                     ? { onRunShellCommand: parentPanel?.runShellCommand ?? runShellCommandStable }

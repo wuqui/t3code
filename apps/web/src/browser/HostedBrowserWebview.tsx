@@ -3,6 +3,7 @@ import type {
   PreviewViewportSetting,
   ScopedThreadRef,
 } from "@t3tools/contracts";
+import { readQuoteMarkRects, type QuoteMarkRect } from "@t3tools/shared/quoteMarks";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
@@ -12,8 +13,13 @@ import {
   takeThumbButtonNavigation,
 } from "~/components/preview/thumbButtons";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
+import { QuoteCommentMarkLayer, useDraftQuoteComments } from "~/components/files/QuoteCommentMarks";
+import { SelectionCommentPopover } from "~/components/files/SelectionCommentAction";
+import { nextFileCommentId } from "~/components/files/fileCommentAnnotations";
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { useViewportSize } from "~/hooks/useViewportSize";
+import { buildWebQuoteReviewComment, isWebQuoteReviewComment } from "~/reviewCommentContext";
 import { cn, isMacPlatform } from "~/lib/utils";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
@@ -33,6 +39,7 @@ import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewS
 import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 import { useBrowserLayoutZoomFactor } from "./useBrowserLayoutZoomFactor";
 import { useBrowserViewportResize } from "./useBrowserViewportResize";
+import { readWebTextSelection, type WebTextSelection } from "./webTextSelection";
 import {
   INITIAL_WEBVIEW_CRASH_RECOVERY_STATE,
   planWebviewCrashRecovery,
@@ -46,6 +53,8 @@ interface ElectronWebview extends HTMLElement {
   webpreferences?: string;
   getWebContentsId: () => number;
   executeJavaScript: (code: string, userGesture?: boolean) => Promise<unknown>;
+  getURL: () => string;
+  send: (channel: string, ...args: unknown[]) => Promise<void>;
 }
 
 declare global {
@@ -90,6 +99,81 @@ export function HostedBrowserWebview(props: {
   const webviewRef = useRef<ElectronWebview | null>(null);
   const crashRecoveryRef = useRef<WebviewCrashRecoveryState>(INITIAL_WEBVIEW_CRASH_RECOVERY_STATE);
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
+  const [textSelection, setTextSelection] = useState<
+    (WebTextSelection & { position: { x: number; y: number }; key: number }) | null
+  >(null);
+  const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
+  const onGuestTextSelection = useEffectEvent((payload: unknown) => {
+    const webview = webviewRef.current;
+    const selection = readWebTextSelection(payload);
+    if (!webview || selection === undefined) return;
+    if (selection === null) {
+      setTextSelection(null);
+      return;
+    }
+    // The page reports CSS pixels; zoom and device viewports scale them on screen.
+    const box = webview.getBoundingClientRect();
+    const cssWidth = Number(webview.dataset.previewCssWidth) || box.width;
+    const scale = box.width / cssWidth;
+    setTextSelection((current) => ({
+      ...selection,
+      position: {
+        x: box.left + selection.rect.right * scale,
+        y: box.top + selection.rect.bottom * scale + 4,
+      },
+      key: (current?.key ?? 0) + 1,
+    }));
+  });
+  // The page the guest shows and a count of its loads; each load starts without marks.
+  const [guestPage, setGuestPage] = useState<{ url: string; load: number } | null>(null);
+  const quoteComments = useDraftQuoteComments(
+    threadRef,
+    (comment) =>
+      guestPage !== null &&
+      isWebQuoteReviewComment(comment) &&
+      comment.filePath.split("#")[0] === guestPage.url.split("#")[0],
+  );
+  const [quoteMarks, setQuoteMarks] = useState<{
+    rects: QuoteMarkRect[];
+    clip: DOMRect;
+  } | null>(null);
+  const onGuestPage = useEffectEvent((loaded: boolean) => {
+    const webview = webviewRef.current;
+    if (!webview) return;
+    let url: string;
+    try {
+      url = webview.getURL();
+    } catch {
+      return;
+    }
+    setGuestPage((current) => ({ url, load: (current?.load ?? 0) + (loaded ? 1 : 0) }));
+  });
+  const onGuestQuoteMarks = useEffectEvent((payload: unknown) => {
+    const webview = webviewRef.current;
+    const rects = readQuoteMarkRects(payload);
+    if (!webview || !rects) return;
+    // The page reports CSS pixels; zoom and device viewports scale them on screen.
+    const box = webview.getBoundingClientRect();
+    const scale = box.width / (Number(webview.dataset.previewCssWidth) || box.width);
+    setQuoteMarks({
+      rects: rects.map((rect) => ({
+        id: rect.id,
+        left: box.left + rect.left * scale,
+        top: box.top + rect.top * scale,
+        right: box.left + rect.right * scale,
+        bottom: box.top + rect.bottom * scale,
+      })),
+      clip: box,
+    });
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands the guest page the quotes to mark through its preload
+  useEffect(() => {
+    if (guestPage === null) return;
+    // Mirrors QUOTE_MARKS_GUEST_CHANNEL in apps/desktop/src/preview/GuestProtocol.ts.
+    webviewRef.current
+      ?.send("preview:quote-marks-set", { quotes: JSON.parse(quoteComments.quotesKey) })
+      .catch(() => {});
+  }, [guestPage, quoteComments.quotesKey]);
   const presentation = useBrowserSurfaceStore(
     useShallow((state) => {
       const current = state.byTabId[runtimeTabId];
@@ -198,9 +282,15 @@ export function HostedBrowserWebview(props: {
       );
     };
     const guestPointerDown = (event: Event) => {
-      // Mirrors POINTER_DOWN_HOST_CHANNEL in apps/desktop/src/preview/GuestProtocol.ts.
-      if ((event as Event & { channel?: string }).channel === "preview:pointer-down") {
+      const { channel, args } = event as Event & { channel?: string; args?: unknown[] };
+      // Mirrors POINTER_DOWN_HOST_CHANNEL and TEXT_SELECTION_HOST_CHANNEL in
+      // apps/desktop/src/preview/GuestProtocol.ts.
+      if (channel === "preview:pointer-down") {
         dismissHostPopups();
+      } else if (channel === "preview:text-selection") {
+        onGuestTextSelection(args?.[0]);
+      } else if (channel === "preview:quote-marks") {
+        onGuestQuoteMarks(args?.[0]);
       }
     };
     // The desktop clears a destroyed guest's id; nothing reattaches this element, so remount it.
@@ -215,6 +305,10 @@ export function HostedBrowserWebview(props: {
     webview.addEventListener("render-process-gone", recoverGuest);
     webview.addEventListener("focus", dismissHostPopups);
     webview.addEventListener("ipc-message", guestPointerDown);
+    const guestLoaded = () => onGuestPage(true);
+    const guestNavigated = () => onGuestPage(false);
+    webview.addEventListener("dom-ready", guestLoaded);
+    webview.addEventListener("did-navigate-in-page", guestNavigated);
     register();
     return () => {
       disposed = true;
@@ -225,6 +319,8 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("render-process-gone", recoverGuest);
       webview.removeEventListener("focus", dismissHostPopups);
       webview.removeEventListener("ipc-message", guestPointerDown);
+      webview.removeEventListener("dom-ready", guestLoaded);
+      webview.removeEventListener("did-navigate-in-page", guestNavigated);
     };
   }, [
     clientSettingsHydrated,
@@ -465,6 +561,36 @@ export function HostedBrowserWebview(props: {
           </>
         ) : null}
       </div>
+      {active && quoteMarks && quoteComments.quotes.length > 0 ? (
+        <QuoteCommentMarkLayer
+          draftTarget={threadRef}
+          comments={quoteComments.comments}
+          rects={quoteMarks.rects}
+          clip={quoteMarks.clip}
+        />
+      ) : null}
+      {textSelection && active ? (
+        <SelectionCommentPopover
+          key={textSelection.key}
+          quote={textSelection}
+          position={textSelection.position}
+          heading={textSelection.pageTitle ?? undefined}
+          onComment={(quote, comment) => {
+            addReviewComment(
+              threadRef,
+              buildWebQuoteReviewComment({
+                id: nextFileCommentId(),
+                url: quote.pageUrl,
+                title: quote.pageTitle,
+                text: comment,
+                quote,
+              }),
+            );
+            return true;
+          }}
+          onDismiss={() => setTextSelection(null)}
+        />
+      ) : null}
     </div>
   );
 }

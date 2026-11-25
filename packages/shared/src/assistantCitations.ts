@@ -40,6 +40,11 @@ export function withAssistantCitationComment(
   return trimmedComment ? { ...source, comment: trimmedComment } : source;
 }
 
+/** Names the quoted passage, so a citation is found again after its comment changes. */
+export function assistantCitationIdentity(citation: AssistantCitation): string {
+  return formatAssistantCitationHref(withAssistantCitationComment(citation, ""));
+}
+
 export function formatAssistantCitationHref(citation: AssistantCitation): string {
   const path = [citation.environmentId, citation.threadId, citation.messageId]
     .map(encodePathPart)

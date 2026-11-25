@@ -83,7 +83,11 @@ import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
-import { buildFileReviewComment, type ReviewCommentContext } from "~/reviewCommentContext";
+import {
+  buildFileReviewComment,
+  buildQuoteReviewComment,
+  type ReviewCommentContext,
+} from "~/reviewCommentContext";
 import { assetEnvironment } from "~/state/assets";
 import { useFileDownload } from "./useFileDownload";
 import { usePreviewAvailable } from "~/browser/previewRuntime";
@@ -98,6 +102,7 @@ import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { AudioPreview } from "./AudioPreview";
 import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
+import type { PdfTextQuote } from "./pdfTextSelection";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import { PreviewImage } from "./PreviewImage";
 import FileBrowserPanel from "./FileBrowserPanel";
@@ -107,9 +112,18 @@ import { breadcrumbPathOf, retainedBreadcrumbTrail, trailChildOf } from "./fileP
 import { ChunkedMarkdown } from "./ChunkedMarkdown";
 import { createPositionMemory, PreviewPositionKey, previewPositionKey } from "./previewPosition";
 import { splitMarkdown } from "@t3tools/shared/markdownChunks";
+import { createSpanCommentAction } from "./spanCommentAction";
+import { SelectionCommentAction } from "./SelectionCommentAction";
+import { DomQuoteCommentMarks, QuoteCommentTargetContext } from "./QuoteCommentMarks";
+import {
+  captureRenderedTextSelection,
+  renderedQuoteReviewComment,
+  type RenderedTextQuote,
+} from "./renderedTextSelection";
 import {
   type FileCommentAnnotationEntry,
   type FileCommentAnnotationGroup,
+  type FileCommentQuote,
   type FileCommentLineAnnotation,
   formatFileCommentRange,
   nextFileCommentId,
@@ -281,6 +295,8 @@ export function WorkspaceBrowserPreview(props: {
   readonly workspaceRoot: string;
   readonly title: string;
   readonly workspaceMutationId: string | null;
+  readonly onPdfComment?: ((quote: PdfTextQuote, comment: string) => boolean) | undefined;
+  readonly onTextComment?: ((quote: RenderedTextQuote, comment: string) => boolean) | undefined;
 }) {
   const pdf = isPdfPreviewFile(props.absolutePath);
   const resource = workspaceAssetResource({
@@ -359,6 +375,8 @@ export function WorkspaceBrowserPreview(props: {
       title={props.title}
       pdf={pdf}
       threadRef={props.threadRef}
+      onPdfComment={props.onPdfComment}
+      onTextComment={props.onTextComment}
       pdfActions={
         <WorkspacePdfSaveAction
           environmentId={props.environmentId}
@@ -957,6 +975,21 @@ function EditableFileSurface({
       editorRef.current = null;
       onEditorChange(null);
     },
+    enabledSelectionAction: true,
+    renderSelectionAction: (context) =>
+      createSpanCommentAction(
+        messages(msg("Comment", { $context: "verb, button that comments on the selected text" })),
+        () => {
+          const { start, end } = context.selection;
+          const text = context.getSelectionText();
+          context.close();
+          if (!text.trim()) return;
+          beginSpanComment(
+            { start: start.line + 1, end: end.line + 1 },
+            { text, startColumn: start.character + 1, endColumn: end.character + 1 },
+          );
+        },
+      ),
   };
 
   const handleEditChange = ({
@@ -983,6 +1016,7 @@ function EditableFileSurface({
             endLine: entry.endLine,
             text: entry.text,
             contents: file.contents,
+            quote: entry.quote,
           }),
         );
       }
@@ -1015,6 +1049,7 @@ function EditableFileSurface({
           endLine: entry.endLine,
           text,
           contents,
+          quote: entry.quote,
         }),
       );
     }
@@ -1032,7 +1067,7 @@ function EditableFileSurface({
     );
   };
 
-  const beginComment = (range: SelectedLineRange) => {
+  const beginComment = (range: SelectedLineRange, quote?: FileCommentQuote) => {
     editorRef.current?.setSelections([]);
     editorRef.current?.blur();
     const { startLine, endLine } = normalizeFileCommentRange(range);
@@ -1042,6 +1077,7 @@ function EditableFileSurface({
       startLine,
       endLine,
       text: "",
+      ...(quote ? { quote } : {}),
     };
     setLineAnnotations((current) => {
       const withoutDraft = current.flatMap((annotation) => {
@@ -1070,6 +1106,10 @@ function EditableFileSurface({
       );
     });
   };
+  // The editor keeps the selection action it rendered first, so it calls the latest handler.
+  const beginSpanComment = useEffectEvent((range: SelectedLineRange, quote: FileCommentQuote) =>
+    beginComment(range, quote),
+  );
   const hasOpenCommentForm = lineAnnotations.some((annotation) =>
     annotation.metadata.entries.some((entry) => entry.kind === "draft"),
   );
@@ -1206,10 +1246,10 @@ function RenderedMarkdownSurface({
   workspaceMutationId,
   readOnly,
   onPendingChange,
+  composerDraftTarget,
 }: Omit<
   EditableFileSurfaceProps,
   | "resolvedTheme"
-  | "composerDraftTarget"
   | "revealLine"
   | "revealRequestId"
   | "wordWrap"
@@ -1232,17 +1272,44 @@ function RenderedMarkdownSurface({
         setProjectFileQueryData(environmentId, cwd, relativePath, nextContents);
         changeFileSaveSession(saveTarget, nextContents);
       };
+  const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const commentOnQuote = (quote: RenderedTextQuote, comment: string) => {
+    addReviewComment(
+      composerDraftTarget,
+      renderedQuoteReviewComment({
+        id: nextFileCommentId(),
+        filePath: relativePath,
+        source: contents,
+        quote,
+        comment,
+      }),
+    );
+    return true;
+  };
 
   return (
-    <ChunkedMarkdown
-      {...splitMarkdown(contents)}
-      cwd={cwd}
-      relativePath={relativePath}
-      threadRef={threadRef}
-      workspaceMutationId={workspaceMutationId}
-      onKeyDown={selectRenderedContentOnSelectAll}
-      onTaskListChange={onTaskListChange}
-    />
+    <div ref={viewportRef} className="flex min-h-0 flex-1 flex-col">
+      <ChunkedMarkdown
+        {...splitMarkdown(contents)}
+        cwd={cwd}
+        relativePath={relativePath}
+        threadRef={threadRef}
+        workspaceMutationId={workspaceMutationId}
+        onKeyDown={selectRenderedContentOnSelectAll}
+        onTaskListChange={onTaskListChange}
+      />
+      <SelectionCommentAction
+        viewportRef={viewportRef}
+        capture={captureRenderedTextSelection}
+        onComment={commentOnQuote}
+      />
+      <DomQuoteCommentMarks
+        rootRef={viewportRef}
+        draftTarget={composerDraftTarget}
+        belongs={(comment) => comment.filePath === relativePath}
+      />
+    </div>
   );
 }
 
@@ -1316,6 +1383,7 @@ function FilePreviewPanelContent({
   const wordWrap = wordWrapOverride ?? defaultWordWrap;
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const hostEnvironmentId = useAtomValue(hostEnvironmentIdAtom);
   const remoteOpenState = useRemoteOpenState(environmentId);
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
@@ -1835,16 +1903,54 @@ function FilePreviewPanelContent({
               workspaceMutationId={workspaceMutationId}
             />
           ) : relativePath && renderBrowserFile && absolutePath ? (
-            <WorkspaceBrowserPreview
-              key={absolutePath}
-              environmentId={environmentId}
-              threadRef={threadRef}
-              draft={draft}
-              absolutePath={absolutePath}
-              workspaceRoot={cwd}
-              title={relativePath}
-              workspaceMutationId={workspaceMutationId}
-            />
+            <QuoteCommentTargetContext
+              value={{ draftTarget: composerDraftTarget, filePath: relativePath }}
+            >
+              <WorkspaceBrowserPreview
+                key={absolutePath}
+                environmentId={environmentId}
+                threadRef={threadRef}
+                draft={draft}
+                absolutePath={absolutePath}
+                workspaceRoot={cwd}
+                title={relativePath}
+                workspaceMutationId={workspaceMutationId}
+                onPdfComment={
+                  isPdf
+                    ? (quote, comment) => {
+                        addReviewComment(
+                          composerDraftTarget,
+                          buildQuoteReviewComment({
+                            id: nextFileCommentId(),
+                            filePath: relativePath,
+                            page: quote.page,
+                            text: comment,
+                            quote,
+                          }),
+                        );
+                        return true;
+                      }
+                    : undefined
+                }
+                onTextComment={
+                  isHtml
+                    ? (quote, comment) => {
+                        addReviewComment(
+                          composerDraftTarget,
+                          renderedQuoteReviewComment({
+                            id: nextFileCommentId(),
+                            filePath: relativePath,
+                            source: file.data?.contents,
+                            quote,
+                            comment,
+                          }),
+                        );
+                        return true;
+                      }
+                    : undefined
+                }
+              />
+            </QuoteCommentTargetContext>
           ) : relativePath && absolutePath && showsLargeText ? (
             <WorkspaceLargeTextPreview
               key={`${threadRef.threadId}:${absolutePath}:${renderTable}:${renderMarkdown}:${fileRefreshRevision}`}
@@ -1933,6 +2039,7 @@ function FilePreviewPanelContent({
                   file.data.truncated || file.data.readOnly === true || isHostFile || !canWriteFiles
                 }
                 onPendingChange={onPendingChange}
+                composerDraftTarget={composerDraftTarget}
               />
             ) : tableDelimiter && renderTable ? (
               <DelimitedTablePreview

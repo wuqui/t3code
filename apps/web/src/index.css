@@ -700,6 +700,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       transparent
     );
   }
+  ::highlight(t3-assistant-citation-draft) {
+    background-color: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
   ::highlight(t3-assistant-citation-comment) {
     background-color: color-mix(in oklab, var(--primary) 45%, transparent);
   }

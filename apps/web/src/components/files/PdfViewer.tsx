@@ -35,6 +35,9 @@ import {
   stepPdfZoom,
   visiblePdfPages,
 } from "./pdfLayout";
+import { FileQuoteCommentMarks } from "./QuoteCommentMarks";
+import { SelectionCommentAction } from "./SelectionCommentAction";
+import { capturePdfTextSelection, type PdfTextQuote } from "./pdfTextSelection";
 import "./pdfViewer.css";
 
 const MAX_PAGES = 2000;
@@ -250,6 +253,7 @@ export default function PdfViewer(props: {
   onViewChange?: (view: PdfViewState) => void;
   onOpenLink?: (url: string, event: MouseEvent) => void;
   actions?: ReactNode;
+  onComment?: (quote: PdfTextQuote, comment: string) => boolean;
 }) {
   const gt = useGT();
   const [savedPosition] = useState(() =>
@@ -631,6 +635,7 @@ export default function PdfViewer(props: {
             {visible.map(({ index, ratio }) => (
               <div
                 key={index}
+                data-pdf-page={index + 1}
                 className="absolute bg-white shadow-sm"
                 style={
                   {
@@ -657,6 +662,15 @@ export default function PdfViewer(props: {
           </div>
         )}
       </div>
+      {props.onComment ? (
+        <SelectionCommentAction
+          viewportRef={scroll}
+          capture={capturePdfTextSelection}
+          heading={(quote) => gt("Page {number}", { number: String(quote.page) })}
+          onComment={props.onComment}
+        />
+      ) : null}
+      {props.onComment ? <FileQuoteCommentMarks rootRef={scroll} /> : null}
     </div>
   );
 }

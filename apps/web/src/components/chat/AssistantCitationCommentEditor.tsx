@@ -1,5 +1,6 @@
 import { ASSISTANT_CITATION_MAX_COMMENT_LENGTH, type AssistantCitation } from "@t3tools/contracts";
 import { T, useGT, Var } from "gt-react";
+import { Trash2Icon } from "lucide-react";
 import {
   use,
   useEffect,
@@ -28,6 +29,7 @@ export function AssistantCitationCommentEditor({
   onSubmit,
   onSubmitAndSend,
   onCancel,
+  onDelete,
   onDraftChange,
   onVoiceSetupOpenChange,
   dictationRef,
@@ -37,6 +39,8 @@ export function AssistantCitationCommentEditor({
   onSubmit: (comment: string) => boolean;
   onSubmitAndSend?: (comment: string) => boolean;
   onCancel: () => void;
+  /** Removes the citation from the composer. */
+  onDelete?: (() => void) | undefined;
   onDraftChange?: (comment: string) => void;
   onVoiceSetupOpenChange?: (open: boolean) => void;
   dictationRef?: Ref<AssistantCitationCommentDictation>;
@@ -142,6 +146,19 @@ export function AssistantCitationCommentEditor({
         </p>
       ) : null}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        {onDelete ? (
+          <Button
+            variant="ghost-destructive"
+            size="xs"
+            className="me-auto"
+            tabIndex={-1}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={onDelete}
+          >
+            <Trash2Icon aria-hidden="true" />
+            {gt("Delete")}
+          </Button>
+        ) : null}
         <TextFieldSpeechControls speech={speech} />
         {/* Wrap as a pair so the recording pill never pushes Save alone onto a new row under Cancel. */}
         <div className="flex gap-2">

@@ -192,6 +192,7 @@ export function AssistantCitationChip({
     sourceAnchor?: AssistantCitationSourceAnchor | undefined;
     onOpenChange: (open: boolean) => void;
     onCancel?: () => void;
+    onDelete?: () => void;
     onSave: (comment: string) => boolean;
     onSaveAndSend?: (comment: string) => boolean;
     onDraftChange?: (comment: string) => void;
@@ -368,6 +369,7 @@ export function AssistantCitationChip({
                       },
                     }
                   : {})}
+                onDelete={commentEditor.onDelete}
                 onCancel={() => {
                   if (commentEditor.onCancel) {
                     commentEditor.onCancel();

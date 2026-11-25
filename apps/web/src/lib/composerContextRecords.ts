@@ -49,7 +49,12 @@ import {
   normalizeTerminalContextText,
   type TerminalContextDraft,
 } from "./terminalContext";
-import type { ReviewCommentContext } from "~/reviewCommentContext";
+import {
+  isHtmlRenderQuoteReviewComment,
+  isWebQuoteReviewComment,
+  webQuoteSiteName,
+  type ReviewCommentContext,
+} from "~/reviewCommentContext";
 import type { MessageResolver } from "~/i18n/messages";
 import { changeRequestTermKind } from "~/components/pullRequest/changeRequestTerm";
 
@@ -107,6 +112,11 @@ export function reviewCommentContextLabel(
   if (isPullRequestSummaryContext(comment) && pullRequestNumber !== null) {
     return `#${pullRequestNumber}`;
   }
+  // A web page's URL ends in a slug; its site and title name it better.
+  if (isWebQuoteReviewComment(comment)) {
+    return `${webQuoteSiteName(comment.filePath)} · ${comment.rangeLabel}`;
+  }
+  if (isHtmlRenderQuoteReviewComment(comment)) return comment.filePath;
   const diffRange = /^([+-])(\d+)(?: to \1(\d+))?$/u.exec(comment.rangeLabel);
   const rangeLabel = diffRange
     ? diffRangeLabel(diffRange[2]!, diffRange[3], diffRange[1] === "-", resolve)
@@ -118,6 +128,9 @@ export function reviewCommentContextLabel(
 
 const REVIEW_SECTION_TITLES: ReadonlyMap<string, string> = new Map([
   ["File comment", msg("File comment")],
+  ["PDF comment", msg("PDF comment")],
+  ["Web page comment", msg("Web page comment")],
+  ["HTML render comment", msg("HTML render comment")],
   ["Review guide", msg("Review guide")],
 ]);
 

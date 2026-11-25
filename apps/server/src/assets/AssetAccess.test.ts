@@ -1861,6 +1861,43 @@ describe("AssetAccess", () => {
       ).toEqual({ kind: "file", path: attachmentPath });
     }).pipe(Effect.provide(layerTest)),
   );
+
+  it.effect("serves inline HTML attachments with the selection script", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000003-html";
+      const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.html`);
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(attachmentPath, "<p>render</p>");
+
+      const resolve = Effect.fn(function* (disposition: "inline" | "attachment") {
+        const result = yield* issueAssetUrl({
+          resource: {
+            _tag: "attachment",
+            attachmentId,
+            fileName: "render.html",
+            mimeType: "text/html",
+            disposition,
+          },
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separatorIndex = suffix.indexOf("/");
+        return yield* resolveAsset(
+          suffix.slice(0, separatorIndex),
+          suffix.slice(separatorIndex + 1),
+        );
+      });
+
+      expect(yield* resolve("inline")).toMatchObject({
+        kind: "file",
+        path: attachmentPath,
+        renderIntent: "file-preview",
+      });
+      expect(yield* resolve("attachment")).toMatchObject({ download: true });
+    }).pipe(Effect.provide(layerTest)),
+  );
   it.effect("issues project favicon capabilities with a signed fallback", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

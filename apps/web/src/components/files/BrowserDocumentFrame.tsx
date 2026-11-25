@@ -11,6 +11,7 @@ import {
   filePreviewRestoreScrollMessage,
   isFilePreviewScrollRestored,
   readFilePreviewScroll,
+  readFilePreviewSelection,
   type HtmlRenderShortcut,
   htmlRenderShortcutsMessage,
   HTML_RENDER_CONTAIN_SCROLL_FRAGMENT,
@@ -23,6 +24,12 @@ import {
   readHtmlRenderLinkRequest,
 } from "@t3tools/shared/htmlRender";
 import {
+  QUOTE_MARKS_REPORT_METHOD,
+  QUOTE_MARKS_SET_METHOD,
+  readQuoteMarkRects,
+  type QuoteMarkRect,
+} from "@t3tools/shared/quoteMarks";
+import {
   isMacPlatform,
   matchesKeybindingShortcut,
   normalizeEventKey,
@@ -31,6 +38,7 @@ import {
   lazy,
   type ReactNode,
   Suspense,
+  use,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -40,6 +48,15 @@ import {
 import { isElectron } from "~/env";
 import { FileSurfaceLoading } from "./fileSurfaceChrome";
 import type { PdfViewState } from "./PdfViewer";
+import type { PdfTextQuote } from "./pdfTextSelection";
+import type { RenderedTextQuote } from "./renderedTextSelection";
+import { SelectionCommentPopover } from "./SelectionCommentAction";
+import { useHtmlRenderComments } from "./HtmlRenderComments";
+import {
+  QuoteCommentMarkLayer,
+  QuoteCommentTargetContext,
+  useDraftQuoteComments,
+} from "./QuoteCommentMarks";
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
@@ -50,6 +67,7 @@ import { useOpenIssueLink } from "~/lib/openIssueLink";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
+import { isWebQuoteReviewComment } from "~/reviewCommentContext";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 
 /**
@@ -88,6 +106,7 @@ function PdfDocument(props: {
   documentKey: string;
   threadRef: ScopedThreadRef | undefined;
   actions?: ReactNode;
+  onComment?: ((quote: PdfTextQuote, comment: string) => boolean) | undefined;
 }) {
   const [view, setView] = useState<PdfViewState>({ page: 0, offset: 0, zoom: null, left: 0 });
   return (
@@ -100,6 +119,7 @@ function PdfDocument(props: {
       onViewChange={setView}
       threadRef={props.threadRef}
       actions={props.actions}
+      onComment={props.onComment}
     />
   );
 }
@@ -113,12 +133,15 @@ function PdfDocumentRevision(props: {
   onViewChange: (view: PdfViewState) => void;
   threadRef: ScopedThreadRef | undefined;
   actions?: ReactNode;
+  onComment?: ((quote: PdfTextQuote, comment: string) => boolean) | undefined;
 }) {
   const [src] = useState(props.src);
   const openLink = useOpenLink(props.threadRef);
   // The Electron shell does not enable PDF plugins. WebKit embeds on iOS
   // expose only the first page, even when pdfViewerEnabled reports support.
+  // Commenting needs the PDF.js text layer, which Chromium's plugin does not expose.
   const native =
+    !props.onComment &&
     !isElectron &&
     navigator.pdfViewerEnabled &&
     !/iPad|iPhone|iPod/.test(navigator.userAgent) &&
@@ -142,6 +165,7 @@ function PdfDocumentRevision(props: {
           void openLink(url, { event }).catch((cause: unknown) => console.error(cause));
         }}
         actions={props.actions}
+        {...(props.onComment ? { onComment: props.onComment } : {})}
       />
     </Suspense>
   );
@@ -163,6 +187,10 @@ export function BrowserDocumentFrame(props: {
   readonly documentId?: string | undefined;
   /** Toolbar actions for the in-app PDF viewer; Chromium's own viewer brings its own. */
   readonly pdfActions?: ReactNode;
+  /** Offers comments on selected PDF text and forces the in-app viewer that supports them. */
+  readonly onPdfComment?: ((quote: PdfTextQuote, comment: string) => boolean) | undefined;
+  /** Offers comments on text selected in a served workspace page. */
+  readonly onTextComment?: ((quote: RenderedTextQuote, comment: string) => boolean) | undefined;
 }) {
   const key = props.documentKey ?? props.src;
   return props.pdf ? (
@@ -173,6 +201,7 @@ export function BrowserDocumentFrame(props: {
       title={props.title}
       threadRef={props.threadRef}
       actions={props.pdfActions}
+      onComment={props.onPdfComment}
     />
   ) : props.htmlRender ? (
     <HtmlRenderDocument
@@ -188,6 +217,7 @@ export function BrowserDocumentFrame(props: {
       documentKey={key}
       src={props.src}
       title={props.title}
+      onComment={props.onTextComment}
     />
   );
 }
@@ -218,7 +248,13 @@ function FileDocument(props: {
   readonly documentKey: string;
   readonly src: string;
   readonly title: string;
+  readonly onComment?: ((quote: RenderedTextQuote, comment: string) => boolean) | undefined;
 }) {
+  const [selection, setSelection] = useState<{
+    quote: RenderedTextQuote;
+    position: { x: number; y: number };
+    key: number;
+  } | null>(null);
   const [frames, setFrames] = useState<FileDocumentFrames>(() => ({
     shown: { key: props.documentKey, src: props.src },
     next: null,
@@ -239,10 +275,77 @@ function FileDocument(props: {
   // Two frames let the browser paint the incoming page before it is uncovered.
   const reveal = (revision: FileDocumentRevision) =>
     requestAnimationFrame(() => requestAnimationFrame(() => setFrames(showRevision(revision))));
+  const commentTarget = use(QuoteCommentTargetContext);
+  const quoteComments = useDraftQuoteComments(
+    props.onComment ? (commentTarget?.draftTarget ?? null) : null,
+    (comment) => comment.filePath === commentTarget?.filePath && !isWebQuoteReviewComment(comment),
+  );
+  const [quoteMarks, setQuoteMarks] = useState<{
+    rects: QuoteMarkRect[];
+    clip: DOMRect;
+  } | null>(null);
+  const sendQuotes = (frame: HTMLIFrameElement | null) =>
+    frame?.contentWindow?.postMessage(
+      {
+        jsonrpc: "2.0",
+        method: QUOTE_MARKS_SET_METHOD,
+        params: { quotes: JSON.parse(quoteComments.quotesKey) },
+      },
+      "*",
+    );
+  const { quotesKey } = quoteComments;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- hands the page on screen the quotes to mark
+  useEffect(() => {
+    shownFrame.current?.contentWindow?.postMessage(
+      { jsonrpc: "2.0", method: QUOTE_MARKS_SET_METHOD, params: { quotes: JSON.parse(quotesKey) } },
+      "*",
+    );
+  }, [
+    quotesKey,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- a newly shown frame has not been given the quotes yet.
+    frames.shown,
+  ]);
   const onFrameMessage = useEffectEvent((event: MessageEvent) => {
+    const shown = shownFrame.current;
+    const data = event.data as { method?: unknown; params?: unknown } | null;
+    if (data?.method === QUOTE_MARKS_REPORT_METHOD) {
+      const rects = readQuoteMarkRects(data.params);
+      if (!rects || !shown || event.source !== shown.contentWindow) return;
+      const frame = shown.getBoundingClientRect();
+      setQuoteMarks({
+        rects: rects.map((rect) => ({
+          id: rect.id,
+          left: frame.left + rect.left,
+          top: frame.top + rect.top,
+          right: frame.left + rect.right,
+          bottom: frame.top + rect.bottom,
+        })),
+        clip: frame,
+      });
+      return;
+    }
+    const reported = readFilePreviewSelection(event.data);
+    if (reported !== undefined) {
+      if (!props.onComment || !shown || event.source !== shown.contentWindow) return;
+      if (reported === null) {
+        setSelection(null);
+        return;
+      }
+      const frame = shown.getBoundingClientRect();
+      const { text, prefix, suffix, rect } = reported;
+      setSelection((current) => ({
+        quote: { text, prefix, suffix },
+        position: { x: frame.left + rect.right, y: frame.top + rect.bottom + 4 },
+        key: (current?.key ?? 0) + 1,
+      }));
+      return;
+    }
     const position = readFilePreviewScroll(event.data);
     if (position !== undefined) {
-      if (event.source === shownFrame.current?.contentWindow) scroll.current = position;
+      if (event.source === shown?.contentWindow) {
+        scroll.current = position;
+        setSelection(null);
+      }
     } else if (
       next !== null &&
       event.source === nextFrame.current?.contentWindow &&
@@ -281,6 +384,7 @@ function FileDocument(props: {
             onLoad={
               revision === next
                 ? (event) => {
+                    sendQuotes(event.currentTarget);
                     if (scroll.current === null) {
                       reveal(revision);
                       return;
@@ -290,11 +394,28 @@ function FileDocument(props: {
                       "*",
                     );
                   }
-                : undefined
+                : (event) => sendQuotes(event.currentTarget)
             }
           />
         ),
       )}
+      {commentTarget && quoteComments.quotes.length > 0 && quoteMarks ? (
+        <QuoteCommentMarkLayer
+          draftTarget={commentTarget.draftTarget}
+          comments={quoteComments.comments}
+          rects={quoteMarks.rects}
+          clip={quoteMarks.clip}
+        />
+      ) : null}
+      {selection && props.onComment ? (
+        <SelectionCommentPopover
+          key={selection.key}
+          quote={selection.quote}
+          position={selection.position}
+          onComment={props.onComment}
+          onDismiss={() => setSelection(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -310,9 +431,12 @@ export function HtmlRenderDocument(props: {
   readonly containScroll?: boolean | undefined;
   /** Reports fullscreen changes so virtualized rows can stay mounted. */
   readonly onFullscreenChange?: ((fullscreen: boolean) => void) | undefined;
+  /** The render in the chat, so selected text can be commented on. */
+  readonly commentSource?: { readonly attachmentId: string; readonly title: string } | undefined;
 }) {
   const theme = useHtmlRenderTheme();
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const comments = useHtmlRenderComments(frameRef, props.commentSource);
   const [src] = useState(
     () =>
       `${props.src.split("#", 1)[0]}${htmlRenderThemeFragment(theme)}${props.containScroll ? HTML_RENDER_CONTAIN_SCROLL_FRAGMENT : ""}`,
@@ -415,6 +539,7 @@ export function HtmlRenderDocument(props: {
       props.onContentHeight?.(height);
       return;
     }
+    if (comments.handleMessage(event.data)) return;
     if (document.activeElement !== frame || navigator.userActivation?.isActive === false) return;
     const linkRequest = readHtmlRenderLinkRequest(event.data);
     if (linkRequest !== undefined) {
@@ -463,6 +588,7 @@ export function HtmlRenderDocument(props: {
           // Covers a theme change that landed while the page was loading.
           postTheme();
           postShortcuts();
+          comments.sendQuotes();
         }}
         // Match the blank document's scheme to avoid dark-mode white flashes, then follow the app after load.
         className={cn("border-0 scheme-light", props.className)}
@@ -471,6 +597,7 @@ export function HtmlRenderDocument(props: {
       {expandedImage !== null ? (
         <ExpandedImageDialog preview={expandedImage} onClose={() => setExpandedImage(null)} />
       ) : null}
+      {comments.overlay}
     </>
   );
 }

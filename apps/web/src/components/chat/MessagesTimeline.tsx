@@ -26,6 +26,7 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
+import type { ComposerThreadTarget } from "~/composerDraftStore";
 import { observeResize } from "~/lib/observeResize";
 import { preserveReadingPosition } from "~/lib/preserveReadingPosition";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -77,6 +78,8 @@ import {
   resolveDisclosureRevealScrollDelta,
 } from "./timelineScrollAnchoring";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
+import { DraftCitationMarks } from "./DraftCitationMarks";
+import { HtmlRenderCommentTargetContext } from "../files/QuoteCommentMarks";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { type AssistantCitationRequest } from "./AssistantCitationSource";
 import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
@@ -245,6 +248,11 @@ interface MessagesTimelineProps {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   onReplyToResponse?: TimelineRowSharedState["onReplyToResponse"];
+  /** Marks the passages the composer's draft quotes; a mark opens the quote's comment. */
+  draftCitations?: {
+    draftTarget: ComposerThreadTarget;
+    onOpen: (citation: AssistantCitation, sourceAnchor: AssistantCitationSourceAnchor) => boolean;
+  };
   isWorking: boolean;
   /** The thread is catching up from a cached copy, whose working state may be stale. */
   syncing?: boolean;
@@ -353,11 +361,13 @@ export function MessagesTimeline(props: MessagesTimelineProps) {
   const find = useContext(ThreadFindTimelineContext);
   const findOpen = find?.findOpen ?? props.findOpen;
   return (
-    <ConversationTimeline
-      {...props}
-      {...find}
-      liveFollowEnabled={!findOpen && props.liveFollowEnabled}
-    />
+    <HtmlRenderCommentTargetContext value={props.draftCitations?.draftTarget ?? null}>
+      <ConversationTimeline
+        {...props}
+        {...find}
+        liveFollowEnabled={!findOpen && props.liveFollowEnabled}
+      />
+    </HtmlRenderCommentTargetContext>
   );
 }
 
@@ -370,6 +380,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
+  draftCitations,
   onReplyToResponse,
   isWorking,
   syncing = false,
@@ -1496,6 +1507,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 viewport={timelineViewportElement}
                 threadRef={citationThreadRef}
                 onCite={onCiteAssistantText}
+              />
+            ) : null}
+            {draftCitations ? (
+              <DraftCitationMarks
+                viewport={timelineViewportElement}
+                draftTarget={draftCitations.draftTarget}
+                onOpen={draftCitations.onOpen}
               />
             ) : null}
             <LegendList<MessagesTimelineRow>

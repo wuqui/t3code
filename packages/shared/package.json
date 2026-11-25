@@ -175,6 +175,10 @@
       "types": "./src/appLinks.ts",
       "import": "./src/appLinks.ts"
     },
+    "./quoteMarks": {
+      "types": "./src/quoteMarks.ts",
+      "import": "./src/quoteMarks.ts"
+    },
     "./htmlRender": {
       "types": "./src/htmlRender.ts",
       "import": "./src/htmlRender.ts"

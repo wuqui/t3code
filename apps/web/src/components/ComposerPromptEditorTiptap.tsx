@@ -42,6 +42,7 @@ import type {
   ServerProviderSkill,
 } from "@t3tools/contracts";
 import {
+  assistantCitationIdentity,
   serializeAssistantCitation,
   withAssistantCitationComment,
 } from "@t3tools/shared/assistantCitations";
@@ -171,6 +172,11 @@ export interface ComposerPromptEditorHandle {
   readSelectionRange: () => { start: number; end: number };
   captureAttachmentInsertion: () => ComposerAttachmentInsertion | undefined;
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
+  /** Opens the comment editor of the composer's chip for `citation`; false when it has none. */
+  openCitationComment: (
+    citation: AssistantCitation,
+    sourceAnchor: AssistantCitationSourceAnchor,
+  ) => boolean;
   readSnapshot: () => {
     value: string;
     cursor: number;
@@ -540,6 +546,19 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
     (editor.isEditable ? chain.focus() : chain).deleteRange({ from, to }).run();
   };
 
+  const onDelete = () => {
+    if (!editor.isEditable) return;
+    const pos = nodePos();
+    if (pos === null) return;
+    const { doc } = editor.state;
+    const current = doc.nodeAt(pos);
+    if (!current || current.type.name !== "composer-citation") return;
+    const end = pos + current.nodeSize;
+    const to = doc.textBetween(end, end + 1) === " " ? end + 1 : end;
+    commentContext.onOpenChange(citeKey, false);
+    editor.chain().focus().deleteRange({ from: pos, to }).run();
+  };
+
   const sentRef = useRef(false);
   const onRestoreFocus = () => {
     const sent = sentRef.current;
@@ -595,7 +614,7 @@ function ComposerCitationNodeView({ node, editor, getPos }: NodeViewProps) {
             if (open && !editor.isEditable) return;
             commentContext.onOpenChange(citeKey, open);
           },
-          ...(removeOnCancel ? { onCancel: onRemove } : {}),
+          ...(removeOnCancel ? { onCancel: onRemove } : { onDelete }),
           onSave: onSaveComment,
           onDraftChange: (comment) => commentContext.onDraftChange(citeKey, comment),
           onSaveAndSend: (comment) => {
@@ -2046,6 +2065,24 @@ function ComposerPromptEditorTiptapInner(
             removeOnCancel: request.insertedSpaces,
           });
         }
+      },
+      openCitationComment: (citation, sourceAnchor) => {
+        if (!editor?.isEditable) return false;
+        const identity = assistantCitationIdentity(citation);
+        let citeKey: string | null = null;
+        editor.state.doc.descendants((node) => {
+          if (citeKey !== null) return false;
+          if (
+            node.type.name === "composer-citation" &&
+            assistantCitationIdentity(node.attrs.citation as AssistantCitation) === identity
+          ) {
+            citeKey = node.attrs.citeKey as string;
+          }
+          return true;
+        });
+        if (citeKey === null) return false;
+        setOpenCitation({ key: citeKey, sourceAnchor });
+        return true;
       },
       readSnapshot,
       isCaretOnVisualEdge: (edge) => {

@@ -452,6 +452,16 @@ describe("reviewCommentContextLabel", () => {
     expect(reviewCommentContextLabel(selection("pull-request:42"))).toBe("#42 page.tsx L12 to L18");
     expect(reviewCommentContextLabel(selection("turn-diff"))).toBe("page.tsx L12 to L18");
   });
+
+  it("names a web page quote by its site and title", () => {
+    expect(
+      reviewCommentContextLabel({
+        ...selection("web:https://www.example.com/news/a-long-slug?x=1"),
+        filePath: "https://www.example.com/news/a-long-slug?x=1",
+        rangeLabel: "A Headline",
+      }),
+    ).toBe("example.com · A Headline");
+  });
 });
 
 describe("producer ids that do not fit the grammar", () => {

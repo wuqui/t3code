@@ -98,6 +98,7 @@ export function HtmlRenderFrame(props: {
               setContentHeight(height);
             }}
             onFullscreenChange={onFullscreenChange}
+            commentSource={props.htmlRender}
           />
           <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/html-render:opacity-100 pointer-coarse:opacity-100">
             <SharedTooltipTrigger
