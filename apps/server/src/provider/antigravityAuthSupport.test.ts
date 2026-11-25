@@ -800,6 +800,33 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
     }),
   );
 
+  it.effect("keeps user settings such as permission rules across launches", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporaryDirectory = yield* fs.makeTempDirectoryScoped();
+      const profile = yield* prepareAntigravityProfile({ profileDirectory: temporaryDirectory });
+      const settingsPath = path.join(profile.acpDirectory, "settings.json");
+      const permissions = { allow: ["mcp(lmu-mail/lmu_list_folders)"], deny: ["mcp(x/send)"] };
+      yield* fs.writeFileString(
+        settingsPath,
+        JSON.stringify({ auth: { type: "stale" }, gcp: { project: "old" }, permissions }),
+      );
+
+      yield* prepareAntigravityProfile({ profileDirectory: temporaryDirectory });
+      expect(decodeJson(yield* fs.readFileString(settingsPath))).toEqual({
+        permissions,
+        auth: { type: "oauth-personal" },
+      });
+
+      yield* fs.writeFileString(settingsPath, "not json");
+      yield* prepareAntigravityProfile({ profileDirectory: temporaryDirectory });
+      expect(decodeJson(yield* fs.readFileString(settingsPath))).toEqual({
+        auth: { type: "oauth-personal" },
+      });
+    }),
+  );
+
   const preflightHelper = (exitDelay: Effect.Effect<void>) => {
     const spawns = { count: 0 };
     const started = Deferred.makeUnsafe<void>();

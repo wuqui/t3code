@@ -49,6 +49,9 @@ const ProfileSettingsFile = Schema.Struct({
   ),
 });
 const encodeProfileSettings = Schema.encodeSync(Schema.fromJsonString(ProfileSettingsFile));
+const ProfileSettingsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
+const decodeStoredProfileSettings = Schema.decodeUnknownOption(ProfileSettingsJson);
+const encodeMergedProfileSettings = Schema.encodeSync(ProfileSettingsJson);
 const isAcpRequestError = Schema.is(AcpErrors.AcpRequestError);
 const isAcpTransportError = Schema.is(AcpErrors.AcpTransportError);
 
@@ -141,17 +144,26 @@ export function antigravityAuthConfigIssue(auth: AntigravityAuthConfig): string 
 
 /**
  * `auth.type` names the selected method so a native logout clears only that method's credentials
- * instead of every stored token. Never holds a credential.
+ * instead of every stored token. Never holds a credential. T3 owns `auth` and `gcp`; every other
+ * key of an existing file (such as `permissions` rules saved by the user or Antigravity) is kept.
  */
-function antigravityProfileSettings(auth: AntigravityAuthConfig): string {
+function antigravityProfileSettings(auth: AntigravityAuthConfig, stored?: string): string {
   const gcp = {
     ...(auth.gcpProject ? { project: auth.gcpProject } : {}),
     ...(auth.gcpLocation ? { location: auth.gcpLocation } : {}),
   };
-  return `${encodeProfileSettings({
+  const owned = encodeProfileSettings({
     auth: { type: auth.authMethod },
     ...(Object.keys(gcp).length > 0 ? { gcp } : {}),
-  })}\n`;
+  });
+  const {
+    auth: _auth,
+    gcp: _gcp,
+    ...kept
+  } = stored === undefined ? {} : Option.getOrElse(decodeStoredProfileSettings(stored), () => ({}));
+  if (Object.keys(kept).length === 0) return `${owned}\n`;
+  const ownedFields = Option.getOrThrow(decodeStoredProfileSettings(owned));
+  return `${encodeMergedProfileSettings({ ...kept, ...ownedFields })}\n`;
 }
 
 export interface AntigravityAuthorizationUrl {
@@ -530,8 +542,12 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
         );
     }
   }
+  const settingsPath = path.join(acpDirectory, "settings.json");
+  const storedSettings = yield* fs
+    .readFileString(settingsPath)
+    .pipe(Effect.orElseSucceed((): string | undefined => undefined));
   yield* fs
-    .writeFileString(path.join(acpDirectory, "settings.json"), antigravityProfileSettings(auth))
+    .writeFileString(settingsPath, antigravityProfileSettings(auth, storedSettings))
     .pipe(
       Effect.mapError(() =>
         authSupportError("The Antigravity profile settings could not be written."),
