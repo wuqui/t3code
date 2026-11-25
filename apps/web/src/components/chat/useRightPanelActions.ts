@@ -172,7 +172,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     useRightPanelStore.getState().openFile(activeThreadRef, relativePath);
   };
   const openFileSurfaceStable = useStableCallback(openFileSurface);
-  const closePreviewPanel = () => {
+  const hidePanel = (keepMaximized: boolean) => {
     if (activeThreadRef) {
       const source =
         activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId
@@ -187,10 +187,11 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
           deviceState: deviceStateLoaded ? deviceState : null,
         });
       }
-      useRightPanelStore.getState().setMaximized(activeThreadRef, false);
+      if (!keepMaximized) useRightPanelStore.getState().setMaximized(activeThreadRef, false);
       useRightPanelStore.getState().close(activeThreadRef);
     }
   };
+  const closePreviewPanel = () => hidePanel(false);
   const closePreviewPanelStable = useStableCallback(closePreviewPanel);
   const togglePreviewPanel = () => {
     if (!activeThreadRef || !browserAvailable) return;
@@ -237,8 +238,9 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const activateRightPanelSurfaceStable = useStableCallback(activateRightPanelSurface);
   const toggleRightPanel = () => {
     if (!activeThreadRef) return;
+    // Showing the panel again restores the size it was hidden at, full view included.
     if (rightPanelOpen) {
-      closePreviewPanel();
+      hidePanel(true);
       return;
     }
     useRightPanelStore.getState().toggleVisibility(activeThreadRef);
