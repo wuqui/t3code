@@ -29,6 +29,7 @@ import {
   buildAntigravityPrompt,
   type AntigravityAcpRuntimeInput,
 } from "../../provider/acp/AntigravityAcpSupport.ts";
+import { antigravityPermissionRulesReader } from "../../provider/acp/AntigravityPermissionRules.ts";
 import {
   ANTIGRAVITY_SUBAGENT_BATCH_TITLE,
   antigravitySubagentLaunches,
@@ -155,6 +156,7 @@ export function makeAntigravityAcpAdapterFlavor(
   options: AntigravityAdapterV2Options & AntigravityFlavorServices,
 ): AcpAdapterV2Flavor {
   const { profileDirectory } = options;
+  const readPermissionRules = antigravityPermissionRulesReader(profileDirectory);
   const antigravityClientFileRoots = (cwd: string | null) =>
     cwd === null ? [options.host.paths.attachmentsDir] : [cwd, options.host.paths.attachmentsDir];
   const makeRuntime = Effect.fn("AntigravityAdapterV2.makeRuntime")(
@@ -297,7 +299,8 @@ export function makeAntigravityAcpAdapterFlavor(
           request,
         }),
     },
-    permissionDisposition: antigravityPermissionDisposition,
+    permissionDisposition: (policy, request) =>
+      antigravityPermissionDisposition(policy, request, readPermissionRules()),
     approvalOptions: antigravityApprovalOptions,
     extractPermissionQuestion: (request) => {
       const question = extractAntigravityUserInputQuestion(request);

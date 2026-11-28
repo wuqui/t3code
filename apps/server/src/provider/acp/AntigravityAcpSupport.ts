@@ -220,12 +220,75 @@ function isAntigravityT3McpRequest(request: EffectAcpSchema.RequestPermissionReq
   return tool !== undefined && isAntigravityT3McpTool(tool, rawInput);
 }
 
+/** The `permissions` rules in agy's profile settings.json, as `mcp(<server>/<tool>)` strings. */
+export interface AntigravityPermissionRules {
+  readonly allow: ReadonlyArray<string>;
+  readonly deny: ReadonlyArray<string>;
+}
+
+const NO_PERMISSION_RULES: AntigravityPermissionRules = { allow: [], deny: [] };
+
+export function parseAntigravityPermissionRules(
+  settings: string | undefined,
+): AntigravityPermissionRules {
+  if (settings === undefined) return NO_PERMISSION_RULES;
+  let permissions: Record<string, unknown> | undefined;
+  try {
+    permissions = unknownRecord(unknownRecord(JSON.parse(settings))?.permissions);
+  } catch {
+    return NO_PERMISSION_RULES;
+  }
+  const rules = (value: unknown) =>
+    Array.isArray(value) ? value.filter((rule): rule is string => typeof rule === "string") : [];
+  return { allow: rules(permissions?.allow), deny: rules(permissions?.deny) };
+}
+
+const ANTIGRAVITY_MCP_RULE = /^mcp\((?<server>[^/()]+)\/(?<tool>[^()]+)\)$/;
+const ANTIGRAVITY_MCP_TITLE = /^Run mcp_(?<name>.+?)\??$/;
+
+function antigravityMcpRuleMatches(
+  rule: string,
+  request: EffectAcpSchema.RequestPermissionRequest,
+): boolean {
+  const ruled = ANTIGRAVITY_MCP_RULE.exec(rule)?.groups;
+  if (ruled?.server === undefined || ruled.tool === undefined) return false;
+  const title = request.toolCall.title?.trim() ?? "";
+  const rawInput = unknownRecord(request.toolCall.rawInput);
+  const proxiedTool = ANTIGRAVITY_PROXIED_MCP_TITLE.exec(title)?.groups?.tool;
+  if (proxiedTool !== undefined) {
+    return (
+      rawInput?.ToolName === proxiedTool &&
+      rawInput.ServerName === ruled.server &&
+      proxiedTool === ruled.tool
+    );
+  }
+  if (typeof rawInput?.CommandLine === "string") return false;
+  // The title joins server and tool with "_", which both may contain, so compare whole names.
+  return ANTIGRAVITY_MCP_TITLE.exec(title)?.groups?.name === `${ruled.server}_${ruled.tool}`;
+}
+
+/**
+ * agy forwards MCP calls to the client even when its own `permissions` rules allow them, so T3
+ * answers those rules itself: deny wins over allow.
+ */
+function antigravityRuleDisposition(
+  rules: AntigravityPermissionRules,
+  request: EffectAcpSchema.RequestPermissionRequest,
+): "allow" | "deny" | undefined {
+  if (rules.deny.some((rule) => antigravityMcpRuleMatches(rule, request))) return "deny";
+  if (rules.allow.some((rule) => antigravityMcpRuleMatches(rule, request))) return "allow";
+  return undefined;
+}
+
 export function antigravityPermissionDisposition(
   policy: AcpRuntimePolicy,
   request: EffectAcpSchema.RequestPermissionRequest,
+  rules: AntigravityPermissionRules = NO_PERMISSION_RULES,
 ) {
   const disposition = acpPermissionDisposition(policy, request);
   if (disposition === "deny") return "deny";
+  const ruled = antigravityRuleDisposition(rules, request);
+  if (ruled !== undefined) return ruled;
   // T3 authorizes its own MCP server, so Auto and Auto-accept edits run it unasked, as Claude does.
   if (
     (policy.runtimeMode === "auto" || policy.runtimeMode === "auto-accept-edits") &&

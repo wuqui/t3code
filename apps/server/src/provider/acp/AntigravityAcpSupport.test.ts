@@ -16,6 +16,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
   applyAntigravityAcpModelSelection,
   antigravityPermissionDisposition,
+  parseAntigravityPermissionRules,
   antigravityServesT3Code,
   antigravitySessionMeta,
   antigravitySessionMode,
@@ -201,6 +202,90 @@ describe("Antigravity Auto", () => {
       }
     },
   );
+});
+
+describe("antigravityPermissionDisposition with profile rules", () => {
+  const request = (
+    title: string,
+    rawInput?: Record<string, unknown>,
+  ): EffectAcpSchema.RequestPermissionRequest => ({
+    sessionId: "session-1",
+    toolCall: { toolCallId: "call-1", title, kind: "execute", rawInput },
+    options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+  });
+  const rules = parseAntigravityPermissionRules(
+    JSON.stringify({
+      auth: {},
+      permissions: {
+        allow: ["mcp(ticktick/get_user_preference)", "mcp(lmu-mail/lmu_get_draft)", 7],
+        ask: ["mcp(fastmail/draft_email)"],
+        deny: ["mcp(fastmail/send_email)"],
+      },
+    }),
+  );
+
+  it("answers MCP calls the rules allow or deny, in Auto and approval-required", () => {
+    for (const runtimeMode of ["auto", "approval-required"] as const) {
+      const policy = { runtimeMode, cwd: "/workspace" };
+      expect(
+        antigravityPermissionDisposition(
+          policy,
+          request("Run mcp_ticktick_get_user_preference?"),
+          rules,
+        ),
+      ).toBe("allow");
+      expect(
+        antigravityPermissionDisposition(policy, request("Run mcp_lmu-mail_lmu_get_draft"), rules),
+      ).toBe("allow");
+      expect(
+        antigravityPermissionDisposition(
+          policy,
+          request("MCP Tool get_user_preference", {
+            ServerName: "ticktick",
+            ToolName: "get_user_preference",
+          }),
+          rules,
+        ),
+      ).toBe("allow");
+      expect(
+        antigravityPermissionDisposition(policy, request("Run mcp_fastmail_send_email?"), rules),
+      ).toBe("deny");
+    }
+  });
+
+  it("leaves unlisted, ask-listed and look-alike calls to the mode", () => {
+    const policy = { runtimeMode: "auto" as const, cwd: "/workspace" };
+    for (const call of [
+      request("Run mcp_fastmail_draft_email?"),
+      request("Run mcp_ticktick_get_user_preferences?"),
+      request("Run mcp_ticktick_get_user_preference", {
+        CommandLine: "Run mcp_ticktick_get_user_preference",
+      }),
+      // A directly called tool's rawInput is its own arguments.
+      request("Run mcp_other_tool", { ServerName: "ticktick", ToolName: "get_user_preference" }),
+      request("MCP Tool get_user_preference", {
+        ServerName: "other",
+        ToolName: "get_user_preference",
+      }),
+    ]) {
+      expect(antigravityPermissionDisposition(policy, call, rules)).toBe("ask");
+    }
+  });
+
+  it("keeps a sandbox denial over an allow rule", () => {
+    expect(
+      antigravityPermissionDisposition(
+        { runtimeMode: "auto", cwd: "/workspace", sandboxPolicy: { type: "readOnly" } },
+        request("Run mcp_ticktick_get_user_preference?"),
+        rules,
+      ),
+    ).toBe("deny");
+  });
+
+  it("reads no rules from missing or broken settings", () => {
+    expect(parseAntigravityPermissionRules(undefined)).toEqual({ allow: [], deny: [] });
+    expect(parseAntigravityPermissionRules("{not json")).toEqual({ allow: [], deny: [] });
+  });
 });
 
 describe("applyAntigravityAcpModelSelection", () => {
