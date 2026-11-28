@@ -31,6 +31,7 @@ import {
   isVideoAttachment,
 } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
+import { userBlockquotesToMarkdown } from "./userMessageBlockquotes";
 import {
   CalendarClockIcon,
   ChevronDownIcon,
@@ -1291,7 +1292,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   }
   return (
     <ChatMarkdown
-      text={props.text}
+      text={userBlockquotesToMarkdown(props.text)}
       cwd={props.markdownCwd}
       threadRef={ctx.threadRef ?? undefined}
       skills={props.skills}
