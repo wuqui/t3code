@@ -304,6 +304,9 @@ import { SharedTooltipTrigger } from "./ui/shared-tooltip";
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const ADD_PROJECT_ENTRY_GROUP = "add-project";
 const NEW_THREAD_IN_GROUP = "projects";
+const PROJECT_THREADS_PICK_GROUP = "project-threads-pick";
+// The project's member keys ride in the view's group value, joined by "|".
+const PROJECT_THREADS_GROUP_PREFIX = "project-threads:";
 
 /** The submenu an open intent starts in; its groups resolve while rendering. */
 function openIntentView(
@@ -320,6 +323,11 @@ function openIntentView(
       return {
         addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
         groups: [{ value: NEW_THREAD_IN_GROUP, label: resolve(msg("Projects")), items: [] }],
+      };
+    case "threads-in-project":
+      return {
+        addonIcon: <TextSearchIcon className={ADDON_ICON_CLASS} />,
+        groups: [{ value: PROJECT_THREADS_PICK_GROUP, label: resolve(msg("Projects")), items: [] }],
       };
     case "change-theme":
       return {
@@ -571,7 +579,11 @@ function OpenCommandPaletteDialog(props: {
     query: deferredQuery,
   });
   const currentView = viewStack.at(-1)?.view ?? null;
-  const threadSearchQuery = currentView === null && !isActionsOnly ? deferredQuery : "";
+  const projectThreadsKeys = currentView?.groups[0]?.value.startsWith(PROJECT_THREADS_GROUP_PREFIX)
+    ? new Set(currentView.groups[0].value.slice(PROJECT_THREADS_GROUP_PREFIX.length).split("|"))
+    : null;
+  const threadSearchQuery =
+    (currentView === null || projectThreadsKeys !== null) && !isActionsOnly ? deferredQuery : "";
   const [browseGeneration, setBrowseGeneration] = useState(0);
   const [browseNavigation] = useState(createBrowseNavigationCoordinator);
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
@@ -1000,6 +1012,40 @@ function OpenCommandPaletteDialog(props: {
     (item) => projectJumpItems.get(item.value) ?? item,
   );
 
+  const projectThreadsPickItems = buildNewThreadInProjectItems({
+    projects: pickerProjects.filter(
+      (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
+    ),
+    currentProjectKey:
+      currentProjectId === null
+        ? null
+        : (() => {
+            const entry = projectPickerEntries.find((candidate) => candidate.isPreferred);
+            return entry ? `${entry.targetProject.environmentId}:${entry.targetProject.id}` : null;
+          })(),
+    projectGroupByTargetKey,
+    locationByEnvironmentId: projectEnvironmentLocationById,
+    valuePrefix: "project-threads",
+    runProject: async (project) => {
+      const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+      const memberKeys = group
+        ? group.memberProjectRefs.map(
+            (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
+          )
+        : [`${project.environmentId}:${project.id}`];
+      pushPaletteView({
+        addonIcon: <TextSearchIcon className={ADDON_ICON_CLASS} />,
+        groups: [
+          {
+            value: `${PROJECT_THREADS_GROUP_PREFIX}${memberKeys.join("|")}`,
+            label: project.title,
+            items: [],
+          },
+        ],
+      });
+    },
+  });
+
   const {
     threadItems: allThreadItems,
     threadMessageItems,
@@ -1424,6 +1470,22 @@ function OpenCommandPaletteDialog(props: {
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: NEW_THREAD_IN_GROUP, label: gt("Projects"), items: projectThreadItems }],
+    });
+
+    actionItems.push({
+      kind: "submenu",
+      value: "action:threads-in-project",
+      searchTerms: ["threads", "project", "search", "find", "filter"],
+      title: gt("Threads in project..."),
+      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <TextSearchIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: PROJECT_THREADS_PICK_GROUP,
+          label: gt("Projects"),
+          items: projectThreadsPickItems,
+        },
+      ],
     });
   }
 
@@ -1906,6 +1968,13 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems }, messages);
+  const projectThreadValues = new Set(
+    projectThreadsKeys === null
+      ? []
+      : threads
+          .filter((thread) => projectThreadsKeys.has(`${thread.environmentId}:${thread.projectId}`))
+          .map((thread) => `thread:${thread.environmentId}:${thread.id}`),
+  );
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
   const activeGroups =
@@ -1927,13 +1996,30 @@ function OpenCommandPaletteDialog(props: {
                 items: projectThreadItems.length > 0 ? projectThreadItems : [addProjectAction],
               },
             ]
-          : currentView?.groups[0]?.value.startsWith(PORT_FORWARD_GROUP_PREFIX) && portForwardItem
-            ? portForwardItem.groups
-            : currentView?.groups[0]?.value === "themes"
-              ? changeThemeItem.groups
-              : currentView?.groups[0]?.value === "appearance"
-                ? changeAppearanceItem.groups
-                : (currentView?.groups ?? rootGroups);
+          : currentView?.groups[0]?.value === PROJECT_THREADS_PICK_GROUP
+            ? [
+                {
+                  value: PROJECT_THREADS_PICK_GROUP,
+                  label: gt("Projects"),
+                  items: projectThreadsPickItems,
+                },
+              ]
+            : projectThreadsKeys !== null && currentView
+              ? [
+                  {
+                    value: currentView.groups[0]!.value,
+                    label: currentView.groups[0]!.label,
+                    items: allThreadItems.filter((item) => projectThreadValues.has(item.value)),
+                  },
+                ]
+              : currentView?.groups[0]?.value.startsWith(PORT_FORWARD_GROUP_PREFIX) &&
+                  portForwardItem
+                ? portForwardItem.groups
+                : currentView?.groups[0]?.value === "themes"
+                  ? changeThemeItem.groups
+                  : currentView?.groups[0]?.value === "appearance"
+                    ? changeAppearanceItem.groups
+                    : (currentView?.groups ?? rootGroups);
 
   const isLinkedThreadSearch =
     linkedThreadSearch?.linkedThreads !== undefined && deferredQuery === linkedThreadSearch.query;
@@ -1942,7 +2028,8 @@ function OpenCommandPaletteDialog(props: {
       activeGroups,
       query: deferredQuery,
       isInSubmenu: currentView !== null,
-      ...(deferredQuery.trim().length > 0
+      // A project's threads stay in that project, even with no title match.
+      ...(deferredQuery.trim().length > 0 && projectThreadsKeys === null
         ? {
             allOptions: {
               rootGroups,
@@ -1981,6 +2068,22 @@ function OpenCommandPaletteDialog(props: {
     },
     messages,
   );
+  // In a project's threads, message matches follow the title matches, limited to that project.
+  if (projectThreadsKeys !== null && deferredQuery.trim().length > 0) {
+    const listed = new Set(
+      searchedGroups.flatMap((group) => group.items.map((item) => item.value)),
+    );
+    const messageItems = threadMessageItems.filter(
+      (item) => projectThreadValues.has(item.value) && !listed.has(item.value),
+    );
+    if (messageItems.length > 0) {
+      searchedGroups.push({
+        value: "threads-messages",
+        label: gt("In messages"),
+        items: messageItems,
+      });
+    }
+  }
   // Jump shortcuts number the project rows as shown, so a pin cannot move a number to another row.
   const filteredGroups = searchedGroups.map((group) => {
     if (group.value !== NEW_THREAD_IN_GROUP) return group;

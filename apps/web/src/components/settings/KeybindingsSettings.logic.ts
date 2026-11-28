@@ -497,6 +497,7 @@ const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "preview.zoomOut": msg("Preview: Zoom Out"),
   "preview.resetZoom": msg("Preview: Reset Zoom"),
   "commandPalette.toggle": msg("Command Palette: Toggle"),
+  "commandPalette.threadsInProject": msg("Command Palette: Threads in Project"),
   "filePicker.toggle": msg("File Picker: Toggle"),
   "projectSearch.toggle": msg("Project Search: Toggle"),
   "usage.open": msg("Usage: Toggle"),

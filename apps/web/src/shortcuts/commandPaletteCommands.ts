@@ -104,6 +104,11 @@ export function installCommandPaletteCommands(
         void router.navigate({ to: "/usage" });
       },
       "commandPalette.toggle": toggleOverlay("commandPalette.toggle"),
+      "commandPalette.threadsInProject": (event) => {
+        consume(event);
+        if (event.repeat) return;
+        dispatchCommandPalette({ _tag: "OpenThreadsInProject" });
+      },
       "filePicker.toggle": toggleOverlay("filePicker.toggle"),
       "projectSearch.toggle": toggleOverlay("projectSearch.toggle"),
     },

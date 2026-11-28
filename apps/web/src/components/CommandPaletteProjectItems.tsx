@@ -76,11 +76,14 @@ export function buildProjectSearchItems(input: ProjectItemsInput, resolve: Messa
 
 /** Projects as targets of the "New thread in..." submenu. */
 export function buildNewThreadInProjectItems(
-  input: ProjectItemsInput & { readonly currentProjectKey: string | null },
+  input: ProjectItemsInput & {
+    readonly currentProjectKey: string | null;
+    readonly valuePrefix?: string;
+  },
 ) {
   return buildProjectActionItems({
     projects: input.projects,
-    valuePrefix: "new-thread-in",
+    valuePrefix: input.valuePrefix ?? "new-thread-in",
     searchTerms: (project) => {
       const group = input.projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
       const location = input.locationByEnvironmentId.get(project.environmentId);
